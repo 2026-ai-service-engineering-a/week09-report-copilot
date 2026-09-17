@@ -68,3 +68,28 @@ def test_budget_stop_is_reported_not_raised(needs_db):
     _, final, _ = collect("8월 리포트 만들어줘", simulate="budget", max_cost_usd=0.2)
     statuses = {s["status"] for s in final["report"]["sections"]}
     assert "stopped_by_budget" in statuses or "[중단]" in final["report"]["conclusion"]
+
+
+def test_publish_asks_before_doing():
+    """되돌리기 어려운 행동 앞에는 카드가 선다. **묻기만 하고 실행을 끝낸다.**"""
+    events, final, route = collect("이 리포트 발행해줘")
+    asks = [e for e in events if e["event"] == "ask"]
+    assert route == "publish"
+    assert asks and asks[0]["tool"] == "confirm_publish"
+    assert final["report"]["publishedAt"] is None, "묻기만 해야 하는데 발행됐다"
+    assert final["usage"]["calls"] == 0, "되돌리기 어려운 행동을 모델 해석에 맡기지 않는다"
+
+
+def test_approval_comes_back_as_a_second_request():
+    """프런트엔드 도구는 루프를 멈춰 기다리지 않는다. 두 번 돈다."""
+    _, final, route = collect("", tool_result={"name": "confirm_publish", "value": "approved"})
+    assert route == "publish"
+    assert final["report"]["publishedAt"], "승인했는데 발행되지 않았다"
+
+
+def test_rejection_is_a_result_not_an_error():
+    """거절도 결과다. 예외로 처리하면 사용자는 무슨 일이 났는지 모른다."""
+    events, final, _ = collect("", tool_result={"name": "confirm_publish", "value": "rejected"})
+    replies = [e["text"] for e in events if e["event"] == "text"]
+    assert final["report"]["publishedAt"] is None
+    assert replies and "발행하지 않았습니다" in replies[0]

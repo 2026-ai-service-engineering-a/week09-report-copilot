@@ -71,4 +71,5 @@ class ReportState(TypedDict, total=False):
     events: Annotated[list[dict], operator.add]    # 밖으로 내보낼 이벤트
     replans: int                 # 재계획 횟수. 한도는 숫자로 건다
     budget: Any                  # core.harness.BudgetGuard
+    tool_result: dict | None     # 프런트엔드 도구가 돌려준 답 (승인 여부 등)
     simulate: str | None         # 랩 전용 스위치

@@ -82,6 +82,10 @@ class Report(Base):
     filters: Filters = Field(default_factory=Filters)
     sections: list[Section] = Field(default_factory=list, max_length=12)
     conclusion: str = Field(default="", max_length=2000)
+    published_at: str | None = Field(
+        default=None,
+        description="공유 링크를 만든 시각. **되돌리기 어려운 행동**이라 승인 카드를 거친다",
+    )
 
     def dump(self) -> dict:
         """선 위로 나가는 모양. 날짜는 문자열로, 필드는 camelCase로."""

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 from core import config, metrics, patch, schema, tools
@@ -22,7 +23,7 @@ from core.llm import completion
 from core.prompts import ANALYST, NARRATOR, PLANNER, VERIFIER, WRITER
 from graph import router
 from graph.state import (
-    ReportState, state_delta, step_finished, step_started, text, tool_call,
+    ReportState, ask, state_delta, step_finished, step_started, text, tool_call,
 )
 from graph.state import guard as guard_event
 
@@ -334,3 +335,49 @@ def react_plan_node(state: ReportState) -> dict:
     report = patch.apply(report, ops)
     return {"report": report, "plan": [section],
             "events": [state_delta(ops)]}
+
+
+# ── 발행: 되돌리기 어려운 행동 앞의 승인 카드 ────────────────────────
+
+
+def publish_node(state: ReportState) -> dict:
+    """공유 링크를 만들기 전에 **사람에게 묻는다.**
+
+    6주차에 터미널에서 `y/n`을 받던 승인 게이트이고, 7주차 코딩 에이전트에서
+    비용을 보여 주고 물었던 그 자리다. 오늘 그것이 화면의 카드가 된다.
+
+    승인을 묻는 방식이 AG-UI에서는 이렇다. 에이전트가 **프런트엔드 도구**를
+    부르고 실행을 끝낸다. 화면이 카드를 띄우고, 사용자가 누르면 그 답을 실은
+    **새 요청**이 온다. 루프가 멈춰 기다리는 것이 아니라 두 번 도는 것이다.
+
+    묻는 이유는 둘뿐이어야 한다. 되돌리기 어렵거나 돈이 나가거나. 이유 없이
+    묻기 시작하면 사용자는 읽지 않고 누르게 되고, 그러면 게이트가 없는 것과
+    같아진다 (교안 6장 3절).
+    """
+    answer = state.get("tool_result") or {}
+    report = dict(state["report"])
+    sections = report["sections"]
+
+    if answer.get("name") != "confirm_publish":
+        # 아직 안 물어봤다. 묻고 이번 실행을 끝낸다
+        return {"events": [
+            step_started("publish"),
+            ask("confirm_publish", {
+                "summary": report["title"],
+                "sectionCount": len(sections),
+                "period": f"{report['period']['from']} ~ {report['period']['to']}",
+            }),
+            step_finished("publish"),
+        ]}
+
+    if answer.get("value") != "approved":
+        # **거절도 결과다.** 예외로 처리하면 사용자는 무슨 일이 났는지 모른다
+        return {"events": [text("발행하지 않았습니다. 고칠 곳을 알려 주세요.", final=True)]}
+
+    stamp = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+    ops = [patch.replace("/publishedAt", stamp)]
+    report = patch.apply(report, ops)
+    return {"report": report, "events": [
+        state_delta(ops),
+        text(f"발행했습니다. 섹션 {len(sections)}개가 공유 링크에 담겼습니다.", final=True),
+    ]}

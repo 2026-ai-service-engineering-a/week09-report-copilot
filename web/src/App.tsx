@@ -11,9 +11,10 @@
  * 이 랩의 첫 번째 실습이다.
  */
 import { useEffect, useRef, useState } from 'react'
-import { runAgent, runChat, type AguiEvent } from './agui'
+import { runAgent, runChat, type AguiEvent, type ToolCall } from './agui'
 import { touchedSections, type Op } from './patch'
 import { ReportView } from './components/ReportView'
+import { ToolCard } from './components/ToolCard'
 import { MODES, type Mode, type Report } from './types'
 
 const THREAD = 'lab'
@@ -30,6 +31,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [usage, setUsage] = useState<Record<string, unknown> | null>(null)
   const [said, setSaid] = useState('')
+  const [cards, setCards] = useState<ToolCall[]>([])
   const [showTrace, setShowTrace] = useState(false)
   const traceRef = useRef<HTMLDivElement>(null)
 
@@ -48,11 +50,16 @@ export default function App() {
     window.setTimeout(() => setHot(new Set()), 1200)
   }
 
-  async function send(text: string, uiAction?: Record<string, unknown>) {
+  async function send(
+    text: string,
+    uiAction?: Record<string, unknown>,
+    toolResult?: { name: string; value: string },
+  ) {
     if (busy) return
     setBusy(true)
     setEvents([])
     setUsage(null)
+    setCards([])
     if (text) setLines(prev => [...prev, { who: 'user', text }])
 
     // v1은 **일부러** 문서도 선택도 보내지 않는다. 그것이 v1이다
@@ -68,6 +75,7 @@ export default function App() {
       {
         selectedSectionId: selected,
         uiAction,
+        toolResult,
         maxCostUsd: 0.2,
       },
       {
@@ -82,6 +90,9 @@ export default function App() {
           }
           return [...copy, Object.assign({ who: 'agent' as const, text: full }, { id })]
         }),
+        // v3에서만 도구 호출을 화면 조각으로 옮긴다. v2에서는 같은 이벤트가
+        // 흐르지만 화면이 그것을 그리지 않는다. **생성 UI는 프런트의 선택이다**
+        onToolCall: call => { if (mode === 'v3') setCards(prev => [...prev.filter(c => c.id !== call.id), call]) },
         onEvent: event => setEvents(prev => [...prev, event]),
         onDone: result => setUsage((result as { usage?: Record<string, unknown> })?.usage ?? null),
         onError: message => setLines(prev => [...prev, { who: 'agent', text: `⚠ ${message}` }]),
@@ -175,6 +186,13 @@ export default function App() {
                 </p>}
                 {lines.map((line, i) => (
                   <p key={i} className={`line is-${line.who}`}>{line.text}</p>
+                ))}
+                {cards.map(call => (
+                  <ToolCard key={call.id} call={call}
+                    onRespond={value => {
+                      setCards(prev => prev.filter(c => c.id !== call.id))
+                      send('', undefined, { name: call.name, value })
+                    }} />
                 ))}
               </div>
               <form onSubmit={e => { e.preventDefault(); const t = said.trim(); setSaid(''); if (t) send(t) }}>
