@@ -58,7 +58,11 @@ _CAPTION = re.compile(r"(\d{4})년\s*(\d{2})월\s*(\d{2})일")
 _MOVIE_CD = re.compile(r"mstView\('movie','(\d+)'\)")
 
 DURATION = re.compile(r"^\d+분")
-GRADES = {"전체관람가", "12세이상관람가", "15세이상관람가", "청소년관람불가", "제한상영가"}
+# 등급은 **집합이 아니라 무늬로 잡는다.** 옛 영화가 옛 등급 이름을 달고 온다.
+# 재개봉 750편 중 28편이 그랬다: `연소자관람가` · `고등학생이상관람가` ·
+# `18세관람가` · `12세 미만인 자는 관람할 수 없는 등급`. 지금 쓰는 다섯 가지만
+# 적어 두면 이것들이 한 칸씩 밀려 **국적 자리에 등급이 들어앉는다**
+GRADE = re.compile(r"(관람가|관람불가|관람할\s*수\s*없는|제한상영)")
 # 요약정보 뒤에 이어 붙는 **섹션 제목**들. 값이 아니라 칸 이름이므로 국가로
 # 오해하면 안 된다. 등급이 없는 영화에서 정확히 이것들이 한 칸 앞으로 당겨진다.
 SECTION_LABELS = {"등급분류", "홍보용장르", "개봉일", "제작연도", "해당정보없음"}
@@ -191,7 +195,7 @@ def fetch_movie(code: str) -> list[str] | None:
     for item in summary[3:]:
         if not duration and DURATION.match(item):
             duration = item
-        elif not grade and item in GRADES:
+        elif not grade and GRADE.search(item):
             grade = item
         elif not nation and item not in SECTION_LABELS and "자막" not in item and "해설" not in item:
             nation = item

@@ -1,0 +1,104 @@
+/* 디자인 시스템 없이 한 파일로 끝낸다. 이 화면의 주인공은 생김새가 아니라
+   src/agui.ts의 프로토콜이다. */
+:root {
+  --bg: #f6f7f9;
+  --panel: #fff;
+  --line: #e3e6ea;
+  --text: #1a1d21;
+  --muted: #6b7280;
+  --accent: #2f81f7;
+  --hot: #f59e0b;
+  --warn: #d97706;
+  font-family: system-ui, -apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+
+.app { max-width: 1180px; margin: 0 auto; padding: 18px; }
+.top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+.modes { display: flex; gap: 6px; }
+.modes button {
+  padding: 7px 13px; border: 1px solid var(--line); background: var(--panel);
+  border-radius: 999px; cursor: pointer; font-size: 13px; color: var(--text);
+}
+.modes button.is-on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.hint { margin: 0; font-size: 13px; color: var(--muted); }
+.trace-toggle { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; gap: 5px; align-items: center; }
+
+.board { display: grid; grid-template-columns: 1fr 380px; gap: 14px; align-items: start; }
+@media (max-width: 960px) { .board { grid-template-columns: 1fr; } }
+
+.doc { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+.doc-head h2 { margin: 0 0 6px; font-size: 20px; }
+.meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+.meta span { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; }
+
+.section {
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px;
+  cursor: pointer; transition: border-color .15s, background .4s, box-shadow .15s;
+}
+.section:hover { border-color: #c9ced6; }
+.section.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(47,129,247,.18); }
+.section.is-hot { background: rgba(245,158,11,.14); border-color: var(--hot); }
+.section.is-pending { opacity: .55; }
+.section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.section-head h3 { margin: 0; font-size: 14px; flex: 1; }
+.section-tools { display: flex; align-items: center; gap: 5px; }
+.section-tools code { font-size: 10px; color: var(--muted); }
+.section-tools select, .section-tools button {
+  font-size: 11px; border: 1px solid var(--line); background: var(--panel);
+  border-radius: 6px; padding: 2px 6px; cursor: pointer; color: var(--text);
+}
+.badge { font-size: 10px; border-radius: 999px; padding: 1px 7px; border: 1px solid var(--line); color: var(--muted); }
+.badge.is-unverified { color: var(--warn); border-color: var(--warn); }
+.badge.is-stopped_by_budget { color: #dc2626; border-color: #dc2626; }
+
+.chart { width: 100%; height: auto; }
+.chart .axis { stroke: var(--line); }
+.chart .tick { font-size: 9px; fill: var(--muted); }
+.chart-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.chart-row .chart { width: 150px; }
+.legend { list-style: none; margin: 0; padding: 0; font-size: 12px; flex: 1; min-width: 180px; }
+.legend li { display: flex; align-items: center; gap: 7px; padding: 1px 0; }
+.legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.legend b { margin-left: auto; color: var(--muted); font-weight: 600; }
+
+table.mini { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.mini td { padding: 3px 6px; border-bottom: 1px solid var(--line); }
+table.mini .rank { color: var(--muted); width: 22px; }
+table.mini .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.note { margin: 8px 0 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.conclusion { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 14px; border-radius: 6px; transition: background .4s; }
+.conclusion.is-hot { background: rgba(245,158,11,.14); }
+.conclusion strong { font-size: 12px; color: var(--muted); }
+.conclusion p { margin: 5px 0 0; font-size: 13px; line-height: 1.7; }
+
+.side { display: flex; flex-direction: column; gap: 10px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.panel h3 { margin: 0 0 8px; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.panel h3 em { font-style: normal; font-size: 11px; color: var(--accent); margin-left: auto; }
+.panel h3 em.is-dead { color: var(--warn); text-decoration: line-through; }
+.small { font-size: 12px; }
+.muted { color: var(--muted); }
+.warn { color: var(--warn); }
+
+.form { display: grid; gap: 6px; margin-top: 10px; }
+.form button { padding: 7px; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; cursor: pointer; font-size: 12px; }
+
+.chat .lines { max-height: 320px; overflow-y: auto; display: grid; gap: 7px; margin-bottom: 10px; }
+.line { margin: 0; font-size: 13px; line-height: 1.65; padding: 8px 10px; border-radius: 9px; }
+.line.is-user { background: rgba(47,129,247,.1); }
+.line.is-agent { background: var(--bg); }
+.chat form { display: flex; gap: 6px; }
+.chat input { flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.chat form button { padding: 8px 12px; border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.chat form button:disabled { opacity: .5; cursor: default; }
+
+.usage { margin: 0; font-size: 12px; color: var(--muted); text-align: right; }
+.usage em { font-style: normal; color: #16a34a; margin-left: 5px; }
+
+.trace { max-height: 300px; overflow-y: auto; }
+.ev { display: grid; gap: 1px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.ev b { font-size: 10px; color: var(--accent); }
+.ev span { font-size: 10px; color: var(--muted); word-break: break-all; font-family: ui-monospace, Menlo, monospace; }
