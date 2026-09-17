@@ -1,0 +1,124 @@
+# 지표 정의 사전 — 리포트가 쓰는 업무 용어의 뜻과 계산식.
+#
+# 4주차에 배운 검색이 여기서 다시 쓰인다. 다만 대상이 다르다. 그때는 문서였고
+# 여기서는 **업무 용어**다. 컬럼 이름이 한글이라 컬럼 사전은 필요 없지만,
+# "스크린당 관객수"나 "드롭률"이 무슨 뜻인지는 데이터에 적혀 있지 않다.
+#
+# 실제 BI 제품이 metric layer라고 부르는 자리이고, 이것이 없으면 모델이
+# 지표를 **지어낸다.** 지어낸 지표로 만든 리포트는 형태가 멀쩡해서 틀렸다는
+# 것조차 알기 어렵다 (교안 10장 2절).
+#
+# computable: false 인 항목이 중요하다. 정의는 있는데 우리 데이터로는 구할 수
+# 없는 지표다. 이런 것이 있다는 사실 자체를 검색이 알려 줘야 한다.
+
+- id: audi_cnt
+  name: 관객수
+  aliases: [관객, 일별 관객수, 관람객수]
+  unit: 명
+  expr: sum(audi_cnt)
+  computable: true
+  desc: 해당 일자에 그 영화를 관람한 사람 수. 이 랩의 기본 지표다.
+
+- id: audi_acc
+  name: 누적 관객수
+  aliases: [누적관객, 총 관객수, 누적]
+  unit: 명
+  expr: max(audi_acc)
+  computable: true
+  desc: 개봉일부터 해당 일자까지 누적된 관객수. 이미 누적된 값이라 합산하지
+    않고 최댓값을 쓴다. 날짜별로 더하면 같은 관객을 여러 번 세게 된다.
+
+- id: sales_amt
+  name: 매출액
+  aliases: [매출, 일별 매출액]
+  unit: 원
+  expr: sum(sales_amt)
+  computable: true
+  desc: 해당 일자의 발권 매출. 관객수와 나란히 보면 평균 관람료가 드러난다.
+
+- id: sales_share
+  name: 매출액 점유율
+  aliases: [점유율, 매출 점유율]
+  unit: "%"
+  expr: sales_amt / sum(sales_amt) over(day) * 100
+  computable: true
+  desc: 그날 전체 매출에서 그 영화가 차지한 비율. 박스오피스 순위의 근거다.
+
+- id: scrn_cnt
+  name: 스크린수
+  aliases: [상영관수, 스크린]
+  unit: 개
+  expr: max(scrn_cnt)
+  computable: true
+  desc: 그 영화를 건 상영관 수. 배급 규모를 나타낸다.
+
+- id: show_cnt
+  name: 상영횟수
+  aliases: [회차, 상영 회차]
+  unit: 회
+  expr: sum(show_cnt)
+  computable: true
+  desc: 그 영화가 상영된 총 회차.
+
+- id: audi_per_screen
+  name: 스크린당 관객수
+  aliases: [스크린당 관객, 관당 관객수, 스크린 효율]
+  unit: 명/스크린
+  expr: sum(audi_cnt) / nullif(sum(scrn_cnt), 0)
+  computable: true
+  desc: 스크린 하나가 불러 모은 관객 수. 배급 규모를 걷어 낸 화제성 지표다.
+    스크린이 적은 영화가 높게 나오므로 스크린수와 함께 읽어야 한다.
+
+- id: turnover
+  name: 회전율
+  aliases: [상영 회전율, 스크린 회전율]
+  unit: 회/스크린
+  expr: sum(show_cnt) / nullif(sum(scrn_cnt), 0)
+  computable: true
+  desc: 스크린 하나당 몇 번 돌렸는지. 극장이 그 영화에 얼마나 시간을
+    내줬는지를 나타낸다.
+
+- id: drop_rate
+  name: 드롭률
+  aliases: [하락률, 주간 감소율, drop]
+  unit: "%"
+  expr: (이번 주 관객 - 지난 주 관객) / nullif(지난 주 관객, 0) * 100
+  computable: true
+  desc: 직전 기간 대비 관객 감소 비율. 입소문의 대리 지표로 쓴다. 보통 개봉
+    2주차 드롭률이 50%를 넘으면 빠르게 빠진다고 본다.
+
+- id: week_in_release
+  name: 개봉주차
+  aliases: [개봉 후 주차, 상영 주차]
+  unit: 주
+  expr: floor((stat_date - open_dt) / 7) + 1
+  computable: true
+  desc: 개봉일로부터 몇 주째인지. 재개봉작은 개봉일이 수십 년 전이라 값이
+    크게 나온다. 이 데이터에는 1950년 개봉작의 상영 기록도 들어 있다.
+
+- id: wide_release
+  name: 와이드 릴리즈
+  aliases: [와이드, 대규모 개봉]
+  unit: 분류
+  expr: max(scrn_cnt) >= 600
+  computable: true
+  desc: 전국 대규모 개봉. 국내에서는 대략 600개 스크린 이상을 기준으로 삼는다.
+    업계 관행이고 공식 기준은 아니다.
+
+- id: seat_sales_rate
+  name: 좌석판매율
+  aliases: [좌석 점유율, 객석률]
+  unit: "%"
+  expr: null
+  computable: false
+  desc: 판매된 좌석 / 제공된 좌석. **이 데이터로는 계산할 수 없다.** 좌석수
+    컬럼이 없기 때문이다. 요청받으면 계산하지 말고 구할 수 없다고 답해야 한다.
+
+- id: tentpole
+  name: 텐트폴
+  aliases: [텐트폴 영화, 기대작]
+  unit: 분류
+  expr: null
+  computable: false
+  desc: 배급사가 그 시즌의 기둥으로 삼은 대형 기대작. **제작비와 마케팅 규모로
+    정해지는 업계 용어이고 데이터에는 없다.** 관객수로 대신 판단하지 않는다.
