@@ -22,6 +22,7 @@ import time
 from types import SimpleNamespace
 
 from core import config
+from core.harness import BOUNDARY_OPEN as BOUNDARY
 
 # 한 번 답하는 데 매기는 가짜 비용(USD). BudgetGuard가 이 값을 장부에 더한다.
 # 키 없이도 예산 게이트를 시연하려는 장치다
@@ -49,13 +50,22 @@ def _user_text(messages: list[dict]) -> str:
 
 
 def _tool_results(messages: list[dict]) -> list[dict]:
-    """지금까지 도구가 돌려준 것들. 대역이 '결과를 보고' 판단하게 한다."""
+    """지금까지 도구가 돌려준 것들. 대역이 '결과를 보고' 판단하게 한다.
+
+    role이 `tool`인 것만 보지 않는다. 작성가에게는 집계 결과가 **경계로 감싸인
+    사용자 메시지**로 들어오기 때문이다 (`core/harness.wrap_untrusted`).
+    데이터가 어느 자리로 오든 대역은 같은 것을 읽어야 한다.
+    """
     out = []
     for message in messages:
-        if message.get("role") == "tool":
-            body = re.sub(r"<<<[^>]*>>>", "", message.get("content") or "").strip()
+        body = message.get("content") or ""
+        if message.get("role") == "tool" or BOUNDARY in body:
+            body = re.sub(r"<<<[^>]*>>>", "", body).strip()
+            start, end = body.find("{"), body.rfind("}")
+            if start < 0 or end < start:
+                continue
             try:
-                out.append(json.loads(body))
+                out.append(json.loads(body[start:end + 1]))
             except json.JSONDecodeError:
                 pass
     return out
@@ -163,11 +173,32 @@ def _writer(messages: list[dict]) -> str:
         total = result.get("total", total)
     if not rows:
         return f"{MARK}이 구간에서 집계된 값이 없습니다."
-    first = rows[0]
-    if total and isinstance(first[1], (int, float)):
-        return (f"{MARK}{first[0]}이(가) {first[1]:,.0f}으로 가장 많고, "
-                f"전체의 {first[1] / total * 100:.1f}%를 차지합니다.")
-    return f"{MARK}{first[0]}이(가) {first[1]:,.0f}으로 가장 많습니다."
+
+    # **"가장 많다"고 쓰려면 실제로 가장 큰 행을 골라야 한다.**
+    # 첫 행을 집으면 일자별 결과에서 "8월 1일이 가장 많다"가 되는데, 그건
+    # 그냥 기간의 첫날이다. 집계는 맞는데 문장이 틀리는 종류의 오류이고,
+    # 검증자가 숫자만 대조해서는 잡히지 않는다
+    scored = [r for r in rows if isinstance(r[1], (int, float))]
+    if not scored:
+        return f"{MARK}이 구간에서 집계된 값이 없습니다."
+    top = max(scored, key=lambda r: r[1])
+    if total:
+        return (f"{MARK}{top[0]}이(가) {top[1]:,.0f}으로 가장 많고, "
+                f"전체의 {top[1] / total * 100:.1f}%를 차지합니다.")
+    return f"{MARK}{top[0]}이(가) {top[1]:,.0f}으로 가장 많습니다."
+
+
+def _narrate(notes: str) -> str:
+    """결론의 대본. 섹션 메모에서 문장 하나씩 골라 이어 붙인다."""
+    lines = [
+        line.split(": ", 1)[1].replace(MARK, "").strip()
+        for line in (notes or "").splitlines()
+        if line.startswith("- ") and ": " in line
+    ]
+    said = [line for line in lines if line][:2]
+    if not said:
+        return f"{MARK}이 기간에는 결론으로 삼을 만한 수치가 없습니다."
+    return MARK + " ".join(said)
 
 
 def completion(*, simulate: str | None = None, **kwargs):
@@ -192,5 +223,5 @@ def completion(*, simulate: str | None = None, **kwargs):
         # 대역은 늘 통과시킨다. 불일치 재현은 examples/에서 일부러 만든다
         return _response(content="ok", cost=cost, completion_tokens=2)
     if node == "narrate":
-        return _response(content=f"{MARK}{text[:60]}에 대한 결론입니다.", cost=cost)
+        return _response(content=_narrate(text), cost=cost)
     return _response(content=_writer(messages), cost=cost)
