@@ -35,6 +35,15 @@ from core.harness import gate_query
 # 나눌 수 있는 축 → 실제 컬럼. 여기 없는 축으로는 group by가 되지 않는다.
 # 이것이 `run_query`의 게이트다. 검사가 아니라 **표에 없으면 끝**이다
 GROUP_COLUMNS: dict[str, str] = {
+    # 시간 축. `group_by`를 비우면 일자별이고, 기간이 길면 점이 너무 많아진다.
+    # 1년치를 일자별로 그리면 365개 점이라 아무것도 안 보인다
+    "month": "to_char(date_trunc('month', d.stat_date), 'YYYY-MM')",
+    "week": "to_char(date_trunc('week', d.stat_date), 'YYYY-MM-DD')",
+    # 요일은 로케일에 기대지 않고 직접 붙인다. 컨테이너의 로케일이 바뀌면
+    # `to_char(…, 'TMDy')`의 결과가 달라지고, 그러면 교안의 출력과 어긋난다
+    "weekday": ("CASE EXTRACT(ISODOW FROM d.stat_date)"
+                " WHEN 1 THEN '월' WHEN 2 THEN '화' WHEN 3 THEN '수' WHEN 4 THEN '목'"
+                " WHEN 5 THEN '금' WHEN 6 THEN '토' ELSE '일' END"),
     "nation": "m.nation",
     "genre": "split_part(m.genre, ',', 1)",     # '사극, 액션'의 대표 장르 하나
     "movieType": "m.movie_type",
@@ -61,9 +70,13 @@ class RunQueryArgs(BaseModel):
     metric: str = Field(description="지표 id. 모르면 lookup_metric으로 먼저 찾는다")
     date_from: str = Field(description="시작 일자 (YYYY-MM-DD)")
     date_to: str = Field(description="종료 일자 (YYYY-MM-DD)")
-    group_by: Literal["nation", "genre", "movieType", "watchGrade", "distributor",
-                      "movieNm"] | None = Field(
-        default=None, description="나눌 축. 생략하면 일자별로 나눈다"
+    group_by: Literal["month", "week", "weekday", "nation", "genre", "movieType",
+                      "watchGrade", "distributor", "movieNm"] | None = Field(
+        default=None,
+        description=(
+            "나눌 축. 생략하면 일자별. 기간이 한 달을 넘으면 month나 week를 쓴다. "
+            "weekday는 요일 패턴을 볼 때"
+        ),
     )
     nation: str | None = Field(default=None, description="제작 국가로 거른다")
     movie_type: str | None = Field(default=None, description="영화 구분으로 거른다")
@@ -86,7 +99,10 @@ def run_query(args: RunQueryArgs) -> dict:
     label = args.group_by or "stat_date"
 
     where = ["d.stat_date BETWEEN %(f)s AND %(t)s"]
-    params: dict = {"f": args.date_from, "t": args.date_to, "n": args.limit}
+    # 시간 축에서는 `limit`이 화면에 보일 점의 수가 아니라 **기간을 자르는 칼**이
+    # 된다. 12개월을 10으로 자르면 두 달이 조용히 사라지므로 넉넉히 연다
+    cap = 400 if args.group_by in (None, "month", "week") else args.limit
+    params: dict = {"f": args.date_from, "t": args.date_to, "n": cap}
     if args.nation and args.nation != "전체":
         where.append("m.nation = %(nation)s")
         params["nation"] = args.nation
@@ -94,7 +110,15 @@ def run_query(args: RunQueryArgs) -> dict:
         where.append("m.movie_type = %(mtype)s")
         params["mtype"] = args.movie_type
 
-    order = f"{axis} ASC" if args.group_by is None else "2 DESC NULLS LAST"
+    # 시간 축은 값이 아니라 **시간 순서**로 정렬한다. 추세를 보려고 만든 축인데
+    # 큰 값부터 늘어놓으면 선이 뒤죽박죽이 된다
+    time_axis = args.group_by in (None, "month", "week")
+    if args.group_by == "weekday":
+        # 요일도 시간 축이다. 값이 큰 순서로 늘어놓으면 주말이 앞으로 와서
+        # 한 주의 모양이 보이지 않는다
+        order = "MIN(EXTRACT(ISODOW FROM d.stat_date)) ASC"
+    else:
+        order = "1 ASC" if time_axis else "2 DESC NULLS LAST"
     sql = (
         f"SELECT {axis} AS label, {expr} AS value "
         f"FROM daily_boxoffice d JOIN movie m USING (movie_cd) "

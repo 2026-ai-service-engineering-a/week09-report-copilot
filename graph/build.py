@@ -6,6 +6,7 @@
 
     route ─┬─ apply ──────────────────────────────────── END
            ├─ publish ── (승인 카드를 띄우고 끝낸다) ────── END
+           ├─ refresh ── 있던 섹션을 다시 채운다 ─ collect ─ …
            ├─ one ───── section ─ collect ─ verify ───── END
            ├─ react ─── section ─ collect ─ verify ───── narrate ─ END
            └─ plan ──── section × N ─ collect ─ verify ─┬ narrate ─ END
@@ -26,14 +27,15 @@ from langgraph.types import Send
 
 from graph.nodes import (
     MAX_REPLANS, apply_node, collect_node, narrate_node, plan_node,
-    publish_node, react_plan_node, route_node, section_node, verify_node,
+    publish_node, react_plan_node, refresh_node, route_node, section_node,
+    verify_node,
 )
 from graph.state import ReportState
 
 
 def _after_route(state: ReportState) -> str:
-    return {"apply": "apply", "plan": "plan", "react": "react",
-            "one": "react", "publish": "publish"}.get(state.get("route") or "react", "react")
+    return {"apply": "apply", "plan": "plan", "react": "react", "one": "react",
+            "publish": "publish", "refresh": "refresh"}.get(state.get("route") or "react", "react")
 
 
 def _fan_out(state: ReportState):
@@ -75,6 +77,7 @@ def build():
     graph.add_node("plan", plan_node)
     graph.add_node("react", react_plan_node)
     graph.add_node("publish", publish_node)
+    graph.add_node("refresh", refresh_node)
     graph.add_node("section", section_node)
     graph.add_node("collect", collect_node)
     graph.add_node("verify", verify_node)
@@ -83,11 +86,12 @@ def build():
     graph.add_edge(START, "route")
     graph.add_conditional_edges("route", _after_route,
                                 {"apply": "apply", "plan": "plan", "react": "react",
-                                 "publish": "publish"})
+                                 "publish": "publish", "refresh": "refresh"})
     graph.add_edge("apply", END)
     graph.add_edge("publish", END)
     graph.add_conditional_edges("plan", _fan_out, ["section", "collect"])
     graph.add_conditional_edges("react", _fan_out, ["section", "collect"])
+    graph.add_conditional_edges("refresh", _fan_out, ["section", "collect"])
     graph.add_edge("section", "collect")
     graph.add_edge("collect", "verify")
     graph.add_conditional_edges("verify", _after_verify, {"plan": "plan", "narrate": "narrate"})

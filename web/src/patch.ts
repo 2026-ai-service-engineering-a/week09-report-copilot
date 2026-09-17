@@ -65,13 +65,21 @@ export function applyPatch<T>(doc: T, ops: Op[]): T {
   return ops.reduce<T>((current, op) => applyOne(current, op), doc)
 }
 
-/** 바뀐 자리에 잠깐 불을 켜려고 쓴다. `/sections/2/rows` → `/sections/2` */
-export function touchedSections(ops: Op[]): Set<number> {
-  const out = new Set<number>()
+/** 바뀐 자리에 잠깐 불을 켜려고 쓴다.
+ *
+ *  `/sections/2/rows` → 섹션 2, `/period/from` → 머리말.
+ *  **패치가 어디를 고쳤는지 아는 것이 화면을 덜 깜빡이게 하는 값이다.**
+ *  스냅샷을 받으면 이것을 알 수 없어 전부 다시 그리게 된다. */
+export type Touched = { sections: Set<number>; head: boolean; conclusion: boolean }
+
+export function touched(ops: Op[]): Touched {
+  const out: Touched = { sections: new Set(), head: false, conclusion: false }
   for (const op of ops) {
+    if (op.path === '/sections') out.sections.add(-1)          // 통째로 갈렸다
     const found = /^\/sections\/(\d+|-)/.exec(op.path)
-    if (found && found[1] !== '-') out.add(Number(found[1]))
-    if (op.path === '/sections') return new Set([-1])   // 통째로 갈렸다
+    if (found && found[1] !== '-') out.sections.add(Number(found[1]))
+    if (op.path.startsWith('/period') || op.path.startsWith('/filters')) out.head = true
+    if (op.path.startsWith('/conclusion') || op.path.startsWith('/publishedAt')) out.conclusion = true
   }
   return out
 }

@@ -12,7 +12,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { runAgent, runChat, type AguiEvent, type ToolCall } from './agui'
-import { touchedSections, type Op } from './patch'
+import { touched, type Op, type Touched } from './patch'
 import { ReportView } from './components/ReportView'
 import { ToolCard } from './components/ToolCard'
 import { MODES, type Mode, type Report } from './types'
@@ -27,7 +27,7 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null)
   const [lines, setLines] = useState<Line[]>([])
   const [events, setEvents] = useState<AguiEvent[]>([])
-  const [hot, setHot] = useState<Set<number>>(new Set())
+  const [hot, setHot] = useState<Touched>({ sections: new Set(), head: false, conclusion: false })
   const [busy, setBusy] = useState(false)
   const [usage, setUsage] = useState<Record<string, unknown> | null>(null)
   const [said, setSaid] = useState('')
@@ -46,8 +46,9 @@ export default function App() {
   }, [events])
 
   const flash = (ops: Op[]) => {
-    setHot(touchedSections(ops))
-    window.setTimeout(() => setHot(new Set()), 1200)
+    setHot(touched(ops))
+    window.setTimeout(
+      () => setHot({ sections: new Set(), head: false, conclusion: false }), 1400)
   }
 
   async function send(
@@ -93,7 +94,15 @@ export default function App() {
         // v3에서만 도구 호출을 화면 조각으로 옮긴다. v2에서는 같은 이벤트가
         // 흐르지만 화면이 그것을 그리지 않는다. **생성 UI는 프런트의 선택이다**
         onToolCall: call => { if (mode === 'v3') setCards(prev => [...prev.filter(c => c.id !== call.id), call]) },
-        onEvent: event => setEvents(prev => [...prev, event]),
+        onEvent: event => {
+          setEvents(prev => [...prev, event])
+          // 하네스가 무언가를 막거나 잘랐으면 **사용자에게 말해 준다.**
+          // 조용히 자르면 없는 구간이 0이라고 오해한다
+          if (event.type === 'CUSTOM' && event.name === 'guard') {
+            const v = event.value as { check: string; detail: string }
+            setLines(prev => [...prev, { who: 'agent', text: `ⓘ ${v.detail}` }])
+          }
+        },
         onDone: result => setUsage((result as { usage?: Record<string, unknown> })?.usage ?? null),
         onError: message => setLines(prev => [...prev, { who: 'agent', text: `⚠ ${message}` }]),
       },
@@ -181,9 +190,18 @@ export default function App() {
                 </p>
               )}
               <div className="lines">
-                {lines.length === 0 && <p className="small muted">
-                  예: 8월 박스오피스 리포트 국적별로 만들어줘 / 이거 빼줘 / 막대로 바꿔줘
-                </p>}
+                {lines.length === 0 && (
+                  <div className="small muted hints">
+                    <p>이렇게 말해 보세요.</p>
+                    <ul>
+                      <li>2026년 1월부터 월별 관객수 보여줘</li>
+                      <li>국적별로도 보여줘 · 장르별은 어때</li>
+                      <li>3분기만 · 최근 3개월</li>
+                      <li>섹션을 고르고 → 이거 빼줘 · 막대로 바꿔줘</li>
+                      <li>이 리포트 발행해줘</li>
+                    </ul>
+                  </div>
+                )}
                 {lines.map((line, i) => (
                   <p key={i} className={`line is-${line.who}`}>{line.text}</p>
                 ))}

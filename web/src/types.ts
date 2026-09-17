@@ -26,6 +26,7 @@ export type Report = {
   filters: { nation: string; movieType: string }
   sections: Section[]
   conclusion: string
+  publishedAt: string | null
 }
 
 /** 화면 모드 넷. 코어는 하나이고 갈리는 것은 요청이 무엇을 싣느냐뿐이다. */

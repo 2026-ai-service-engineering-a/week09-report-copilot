@@ -26,8 +26,12 @@ from pydantic.alias_generators import to_camel
 
 SectionKind = Literal["chart", "table", "text"]
 ChartKind = Literal["line", "bar", "pie"]
-# 섹션을 나눌 수 있는 축. 여기 없는 값으로는 group by를 할 수 없다
-GroupBy = Literal["nation", "genre", "movieType", "watchGrade", "distributor", "movieNm"]
+# 섹션을 나눌 수 있는 축. 여기 없는 값으로는 group by를 할 수 없다.
+# 앞의 셋이 시간 축이고, 이것이 없으면 "월별로 보여줘"에 대답할 수 없다
+GroupBy = Literal[
+    "month", "week", "weekday",
+    "nation", "genre", "movieType", "watchGrade", "distributor", "movieNm",
+]
 SectionStatus = Literal["ok", "stopped_by_budget", "unverified", "pending"]
 
 
