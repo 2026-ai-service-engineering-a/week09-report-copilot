@@ -67,7 +67,15 @@ def computable_ids() -> list[str]:
 
 
 def _normalize(text: str) -> str:
-    return re.sub(r"[\s·,()]+", "", (text or "").lower())
+    """표기 차이를 걷어낸다. `audiCnt` · `audi_cnt` · `AUDI CNT`가 같아진다.
+
+    **밑줄을 지우는 것이 핵심이다.** 우리 지표 id는 snake_case인데 공유 상태
+    스키마는 선 위에서 camelCase다(`groupBy`). 모델은 그 문서를 보고 있으므로
+    지표도 camelCase로 넘긴다. 실제로 진짜 모델을 붙이자마자
+    `UnknownMetric: audiCnt`가 났다. 각본 대역은 우리가 쓴 id를 그대로
+    돌려주니 이 함정을 덮고 있었다.
+    """
+    return re.sub(r"[\s·,()_\-]+", "", (text or "").lower())
 
 
 def lookup(term: str) -> Metric:

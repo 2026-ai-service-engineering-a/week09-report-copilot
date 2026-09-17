@@ -70,6 +70,10 @@ class Section(Base):
     group_by: GroupBy | None = Field(default=None, description="나눌 축. 없으면 일자별")
     limit: int = Field(default=10, ge=1, le=50, description="표·순위의 행 수")
     rows: list[list] = Field(default_factory=list, description="도구가 채운 집계 결과")
+    total: float | None = Field(
+        default=None,
+        description="잘라 내기 전의 전체 합. 비율을 상위 몇 줄로 계산하지 않게 한다",
+    )
     note: str = Field(default="", description="이 섹션에 대한 한 문장")
     status: SectionStatus = Field(default="ok")
 
