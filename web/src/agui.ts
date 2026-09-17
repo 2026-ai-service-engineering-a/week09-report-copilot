@@ -189,14 +189,3 @@ export async function runAgent(
     }
   }
 }
-
-/** v1 챗 위젯. **화면 상태를 보내지 않는다.** 그 한 가지가 v2와의 차이다. */
-export async function runChat(text: string): Promise<string> {
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ messages: [{ role: 'user', content: text }] }),
-  })
-  const data = await response.json()
-  return data.reply ?? ''
-}

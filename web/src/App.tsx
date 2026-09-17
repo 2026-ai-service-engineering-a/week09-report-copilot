@@ -1,49 +1,64 @@
 /**
- * 화면 넷을 한 앱에 담았다. 코어는 하나이고 갈리는 것은 **요청이 무엇을
- * 실어 보내느냐**뿐이다.
+ * 박스오피스 리포트 코파일럿 — 화면 하나.
  *
- *   v0  조건만 보낸다            POST /api/report
- *   v1  대화만 보낸다            POST /api/chat        ← 여기서 무너진다
- *   v2  대화 + 문서 + 선택        POST /api/agent
- *   v3  v2 + 프런트엔드 도구      POST /api/agent
+ * 모드를 고르는 스위치가 없다. **완성된 제품 하나**이고, 사람과 에이전트가
+ * 같은 문서를 본다. 10주차부터 각자 만들 것도 이 모양이다.
  *
- * 왼쪽 위에서 모드를 바꿔 가며 같은 한마디("이거 빼줘")를 쳐 보는 것이
- * 이 랩의 첫 번째 실습이다.
+ * 화면이 부르는 것은 `POST /api/agent` 하나다. 요청에 세 가지가 실린다.
+ *
+ *   state              지금 화면이 들고 있는 리포트 문서
+ *   selectedSectionId  무엇을 고른 채로 말했는지
+ *   uiAction           버튼·드롭다운으로 조작한 것
+ *
+ * v0 폼형과 v1 챗 위젯은 API에 그대로 남아 있다(`/api/report`·`/api/chat`).
+ * 화면에서 모드를 고르는 대신 `examples/01_chat_widget_breaks.py`가 둘을
+ * 나란히 돌려 무엇이 갈리는지 보여 준다. **화면은 제품이고, 비교는 예제의
+ * 일이다.**
  */
 import { useEffect, useRef, useState } from 'react'
-import { runAgent, runChat, type AguiEvent, type ToolCall } from './agui'
+import { runAgent, type AguiEvent, type ToolCall } from './agui'
 import { touched, type Op, type Touched } from './patch'
 import { ReportView } from './components/ReportView'
 import { ToolCard } from './components/ToolCard'
-import { MODES, type Mode, type Report } from './types'
+import type { Report } from './types'
 
 const THREAD = 'lab'
 
-type Line = { who: 'user' | 'agent'; text: string }
+type Line = { who: 'user' | 'agent'; text: string; id?: string }
+type Config = { mode: string; model: string; provider: string | null; dataReady: boolean }
+
+const EXAMPLES = [
+  '2026년 1월부터 월별 관객수 보여줘',
+  '국적별로도 보여줘',
+  '3분기만',
+  '요일별 패턴은?',
+  '이 리포트 발행해줘',
+]
 
 export default function App() {
-  const [mode, setMode] = useState<Mode>('v2')
   const [report, setReport] = useState<Report | null>(null)
+  const [config, setConfig] = useState<Config | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [lines, setLines] = useState<Line[]>([])
   const [events, setEvents] = useState<AguiEvent[]>([])
+  const [cards, setCards] = useState<ToolCall[]>([])
   const [hot, setHot] = useState<Touched>({ sections: new Set(), head: false, conclusion: false })
   const [busy, setBusy] = useState(false)
   const [usage, setUsage] = useState<Record<string, unknown> | null>(null)
   const [said, setSaid] = useState('')
-  const [cards, setCards] = useState<ToolCall[]>([])
   const [showTrace, setShowTrace] = useState(false)
   const traceRef = useRef<HTMLDivElement>(null)
+  const chatRef = useRef<HTMLDivElement>(null)
 
   // 첫 화면. **저장된 문서를 서버에서 꺼낸다.**
   // 공유 상태가 브라우저에만 있었다면 새로고침에 날아갔을 자리다
   useEffect(() => {
     fetch(`/api/report/${THREAD}`).then(r => r.json()).then(setReport).catch(() => {})
+    fetch('/api/config').then(r => r.json()).then(setConfig).catch(() => {})
   }, [])
 
-  useEffect(() => {
-    traceRef.current?.scrollTo({ top: traceRef.current.scrollHeight })
-  }, [events])
+  useEffect(() => { traceRef.current?.scrollTo({ top: traceRef.current.scrollHeight }) }, [events])
+  useEffect(() => { chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight }) }, [lines, cards, busy])
 
   const flash = (ops: Op[]) => {
     setHot(touched(ops))
@@ -63,37 +78,24 @@ export default function App() {
     setCards([])
     if (text) setLines(prev => [...prev, { who: 'user', text }])
 
-    // v1은 **일부러** 문서도 선택도 보내지 않는다. 그것이 v1이다
-    if (mode === 'v1') {
-      const reply = await runChat(text)
-      setLines(prev => [...prev, { who: 'agent', text: reply }])
-      setBusy(false)
-      return
-    }
-
     await runAgent(
       THREAD, text, report,
-      {
-        selectedSectionId: selected,
-        uiAction,
-        toolResult,
-        maxCostUsd: 0.2,
-      },
+      { selectedSectionId: selected, uiAction, toolResult, maxCostUsd: 0.2 },
       {
         onSnapshot: setReport,
         onDelta: (ops, next) => { setReport(next); flash(ops) },
         onText: (id, full) => setLines(prev => {
           const copy = [...prev]
           const last = copy[copy.length - 1]
-          if (last?.who === 'agent' && (last as Line & { id?: string }).id === id) {
+          if (last?.who === 'agent' && last.id === id) {
             copy[copy.length - 1] = { ...last, text: full }
             return copy
           }
-          return [...copy, Object.assign({ who: 'agent' as const, text: full }, { id })]
+          return [...copy, { who: 'agent', text: full, id }]
         }),
-        // v3에서만 도구 호출을 화면 조각으로 옮긴다. v2에서는 같은 이벤트가
-        // 흐르지만 화면이 그것을 그리지 않는다. **생성 UI는 프런트의 선택이다**
-        onToolCall: call => { if (mode === 'v3') setCards(prev => [...prev.filter(c => c.id !== call.id), call]) },
+        // 도구 호출을 화면 조각으로 옮긴다. 결과가 따라온 것은 그려 주고,
+        // 없는 것은 화면이 실행 주체다 (승인 카드)
+        onToolCall: call => setCards(prev => [...prev.filter(c => c.id !== call.id), call]),
         onEvent: event => {
           setEvents(prev => [...prev, event])
           // 하네스가 무언가를 막거나 잘랐으면 **사용자에게 말해 준다.**
@@ -110,38 +112,27 @@ export default function App() {
     setBusy(false)
   }
 
-  async function buildForm(groupBy: string) {
-    setBusy(true)
-    const response = await fetch('/api/report', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        date_from: report?.period.from ?? '2026-08-01',
-        date_to: report?.period.to ?? '2026-08-31',
-        group_by: groupBy || null,
-      }),
-    })
-    const data = await response.json()
-    setReport(data.report)
-    setUsage(data.usage)
-    setBusy(false)
-  }
-
   if (!report) return <main className="app"><p className="muted">불러오는 중…</p></main>
 
-  const current = MODES.find(m => m.id === mode)!
+  const scripted = config?.mode === 'offline'
 
   return (
     <main className="app">
       <header className="top">
-        <div className="modes">
-          {MODES.map(m => (
-            <button key={m.id} className={mode === m.id ? 'is-on' : ''} onClick={() => setMode(m.id)}>
-              {m.label}
-            </button>
-          ))}
-        </div>
-        <p className="hint">{current.hint}</p>
+        <h1>박스오피스 리포트 코파일럿</h1>
+        {config && (
+          <span
+            className={`pill ${scripted ? 'is-scripted' : 'is-live'}`}
+            title={scripted
+              ? '키가 없어 각본 대역이 모델을 대신합니다. 질의도 상태 패치도 진짜로 일어납니다'
+              : `${config.model}을 실제로 부릅니다`}
+          >
+            {scripted ? '각본 대역' : config.model}
+          </span>
+        )}
+        {config && !config.dataReady && (
+          <span className="pill is-warn">데이터 없음 · scripts.load_data</span>
+        )}
         <label className="trace-toggle">
           <input type="checkbox" checked={showTrace} onChange={e => setShowTrace(e.target.checked)} />
           이벤트 보기
@@ -155,71 +146,56 @@ export default function App() {
           onSelect={setSelected}
           onAction={action => send('', action)}
           hot={hot}
-          editable={mode === 'v2' || mode === 'v3'}
+          editable
         />
 
         <aside className="side">
-          {mode === 'v0' ? (
-            <div className="panel">
-              <h3>조건</h3>
-              <p className="small muted">
-                폼에 있는 것만 말할 수 있습니다. 대화가 낄 자리가 없습니다.
-              </p>
-              <div className="form">
-                {['', 'nation', 'genre', 'distributor'].map(axis => (
-                  <button key={axis || 'none'} disabled={busy} onClick={() => buildForm(axis)}>
-                    {axis === '' ? '일자별' : axis}로 만들기
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="panel chat">
-              <h3>
-                {mode === 'v1' ? '챗 위젯' : '코파일럿'}
-                {selected && (
-                  <em className={mode === 'v1' ? 'is-dead' : ''}>
-                    {selected} 선택됨{mode === 'v1' ? ' (보내지 않음)' : ''}
-                  </em>
-                )}
-              </h3>
-              {mode === 'v1' && (
-                <p className="small warn">
-                  이 위젯은 화면을 보지 못합니다. 왼쪽에서 섹션을 고른 다음
-                  "이거 빼줘"라고 해 보세요. 고른 것은 화면만 알고 있습니다.
-                </p>
+          <div className="panel chat">
+            <h3>
+              코파일럿
+              {selected && <em>{selected} 선택됨</em>}
+            </h3>
+
+            <div className="lines" ref={chatRef}>
+              {lines.length === 0 && !busy && (
+                <div className="small muted hints">
+                  <p>이렇게 말해 보세요.</p>
+                  <ul>
+                    {EXAMPLES.map(text => (
+                      <li key={text}>
+                        <button type="button" onClick={() => send(text)} disabled={busy}>{text}</button>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="tip">섹션을 클릭해 고른 다음 "이거 빼줘"라고 해 보세요.</p>
+                </div>
               )}
-              <div className="lines">
-                {lines.length === 0 && (
-                  <div className="small muted hints">
-                    <p>이렇게 말해 보세요.</p>
-                    <ul>
-                      <li>2026년 1월부터 월별 관객수 보여줘</li>
-                      <li>국적별로도 보여줘 · 장르별은 어때</li>
-                      <li>3분기만 · 최근 3개월</li>
-                      <li>섹션을 고르고 → 이거 빼줘 · 막대로 바꿔줘</li>
-                      <li>이 리포트 발행해줘</li>
-                    </ul>
-                  </div>
-                )}
-                {lines.map((line, i) => (
-                  <p key={i} className={`line is-${line.who}`}>{line.text}</p>
-                ))}
-                {cards.map(call => (
-                  <ToolCard key={call.id} call={call}
-                    onRespond={value => {
-                      setCards(prev => prev.filter(c => c.id !== call.id))
-                      send('', undefined, { name: call.name, value })
-                    }} />
-                ))}
-              </div>
-              <form onSubmit={e => { e.preventDefault(); const t = said.trim(); setSaid(''); if (t) send(t) }}>
-                <input value={said} onChange={e => setSaid(e.target.value)}
-                  placeholder={busy ? '도는 중…' : '무엇을 할까요?'} disabled={busy} />
-                <button disabled={busy || !said.trim()}>보내기</button>
-              </form>
+              {lines.map((line, i) => (
+                <p key={i} className={`line is-${line.who}`}>{line.text}</p>
+              ))}
+              {cards.map(call => (
+                <ToolCard
+                  key={call.id}
+                  call={call}
+                  onRespond={value => {
+                    setCards(prev => prev.filter(c => c.id !== call.id))
+                    send('', undefined, { name: call.name, value })
+                  }}
+                />
+              ))}
+              {busy && <p className="line is-agent is-busy">도는 중…</p>}
             </div>
-          )}
+
+            <form onSubmit={e => { e.preventDefault(); const t = said.trim(); setSaid(''); if (t) send(t) }}>
+              <input
+                value={said}
+                onChange={e => setSaid(e.target.value)}
+                placeholder={busy ? '도는 중…' : '무엇을 할까요?'}
+                disabled={busy}
+              />
+              <button disabled={busy || !said.trim()}>보내기</button>
+            </form>
+          </div>
 
           {usage && (
             <p className="usage">

@@ -1,15 +1,15 @@
-"""문 — 화면 모드 넷이 부르는 자리.
+"""문 — 셋이 같은 코어를 부른다.
 
-이 랩의 재미는 **네 모드가 같은 코어를 부른다**는 데 있다. 갈리는 것은
-요청이 무엇을 실어 오느냐뿐이다.
+  POST /agent       **제품의 문.** 대화 + 상태 + 선택이 함께 온다 (api/agui.py)
+  POST /report      폼형.    조건만 온다. 대화가 없다
+  POST /chat        챗 위젯. 대화만 온다. **화면 상태가 없다**
 
-  POST /report      v0 폼형.    조건만 온다. 대화가 없다
-  POST /chat        v1 챗 위젯. 대화만 온다. **화면 상태가 없다**
-  POST /agent       v2·v3.      대화 + 상태 + 선택이 함께 온다 (api/agui.py)
+화면(`web/`)이 쓰는 것은 첫 줄 하나다. 아래 둘은 **비교를 위해 남겨 둔
+계약**이고, `examples/01_chat_widget_breaks.py`와 `tests/`가 부른다.
 
-`/chat`과 `/agent`가 같은 그래프를 부른다는 것을 봐 두자. v1이 무너지는
-것은 모델이 나빠서가 아니라 **요청에 화면이 없어서**다. 코드로는
-`selected=None` 한 줄의 차이다 (교안 3장 3절).
+셋이 같은 그래프를 부른다는 것을 봐 두자. 챗 위젯이 무너지는 것은 모델이
+나빠서가 아니라 **요청에 화면이 없어서**다. 코드로는 `selected=None` 한
+줄의 차이다 (교안 3장 3절).
 """
 
 from __future__ import annotations
@@ -100,7 +100,7 @@ def read_report(thread_id: str) -> dict:
 
 @app.post("/report")
 def build_report(body: ReportRequest) -> dict:
-    """v0 · 폼형. AI가 화면 **뒤에** 있다.
+    """폼형. AI가 화면 **뒤에** 있다. 화면은 이 문을 쓰지 않는다.
 
     3주차 식단 플래너와 같은 모양이다. 조건을 폼으로 받아 결과를 돌려주고
     끝난다. 서버는 요청 사이에 아무것도 기억하지 않는다.
@@ -122,7 +122,7 @@ def build_report(body: ReportRequest) -> dict:
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(body: ChatRequest) -> ChatResponse:
-    """v1 · 챗 위젯. AI가 화면 **옆에** 있다.
+    """챗 위젯. AI가 화면 **옆에** 있다. 화면은 이 문을 쓰지 않는다.
 
     **일부러 화면 상태를 받지 않는다.** 이 계약에는 `state`도 `selected`도
     없고, 그래서 사용자가 화면에서 섹션을 고른 채 "이거 빼줘"라고 해도

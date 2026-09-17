@@ -32,6 +32,23 @@ MAX_REPLANS = 2      # 한도는 숫자로 건다. 넘으면 답으로 알린다
 GROUP_AXES = frozenset(getattr(schema.GroupBy, "__args__", ()))
 
 
+def _chart_word(said: str) -> str | None:
+    """말에서 차트 종류를 읽는다.
+
+    낱말이 나오고 그 뒤에 차트·그래프·로 같은 말이 따라오면 그것으로 본다.
+    "막대 그래프로 해줘"가 안 통해서 고쳤다. 정규식으로 말끝을 전부 적으려
+    들면 사용자가 말하는 방식을 매번 따라다니게 된다.
+    """
+    for word, kind in _CHART_WORDS.items():
+        found = said.find(word)
+        if found < 0:
+            continue
+        tail = said[found + len(word):found + len(word) + 12]
+        if tail.startswith("로") or "차트" in tail or "그래프" in tail or "graph" in tail.lower():
+            return kind
+    return None
+
+
 def _report_title(start: dt.date, end: dt.date) -> str:
     """문서 제목을 기간에서 만든다."""
     if (start.year, start.month) == (end.year, end.month):
@@ -135,9 +152,12 @@ def route_node(state: ReportState) -> dict:
 
 # ── apply: 모델을 부르지 않는 길 ──────────────────────────────────────
 
-_CHART_WORDS = {"막대": "bar", "바": "bar", "bar": "bar",
+# 말끝이 여러 가지다. "막대로" · "막대 차트로" · "막대 그래프로 해줘" ·
+# "막대로 바꿔줘". 앞의 낱말만 찾고 뒤는 보지 않는다. 뒤를 정확히 맞히려
+# 들면 사용자가 말하는 방식을 매번 따라다니게 된다
+_CHART_WORDS = {"막대": "bar", "바 ": "bar", "bar": "bar",
                 "선": "line", "라인": "line", "line": "line",
-                "파이": "pie", "원": "pie", "pie": "pie"}
+                "파이": "pie", "원형": "pie", "pie": "pie"}
 
 
 def _selected_index(state: ReportState) -> int | None:
@@ -172,7 +192,7 @@ def apply_node(state: ReportState) -> dict:
     elif action.get("type") == "set_filter":
         ops = [patch.replace(f"/filters/{action['field']}", action["value"])]
     elif index is not None:
-        kind = next((v for k, v in _CHART_WORDS.items() if f"{k}로" in said or f"{k} 차트" in said), None)
+        kind = _chart_word(said)
         if kind:
             ops = [patch.replace(f"/sections/{index}/chart", kind)]
         elif any(word in said for word in ("빼", "지워", "삭제")):
