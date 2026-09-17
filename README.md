@@ -79,6 +79,23 @@ docker compose exec api python -m scripts.load_data
 모델을 대신합니다. 가짜인 것은 모델뿐이고 질의도, 상태 패치도, 예산도 진짜로
 일어납니다.
 
+진짜 모델로 돌려 보려면 `.env`에 프로바이더 키를 **하나만** 채우고 앱을 다시
+만듭니다. 8주차와 달리 **게이트웨이가 없습니다.** 8주차 8장의 판단 그대로로,
+부르는 곳이 하나면 직접 호출이 맞고 게이트웨이는 장애점을 하나 늘릴 뿐입니다.
+
+```sh
+# .env — 셋 중 하나만
+GEMINI_API_KEY=…        # → gemini/gemini-2.5-flash
+OPENAI_API_KEY=…        # → openai/gpt-4o-mini
+ANTHROPIC_API_KEY=…     # → anthropic/claude-haiku-4-5-20251001
+
+docker compose up -d --force-recreate api
+curl -s localhost:8000/config      # mode가 live로 바뀐다
+```
+
+키는 `api` 컨테이너에만 갑니다. **브라우저 번들에는 들어가지 않습니다.**
+화면은 우리 api만 부르고 모델은 서버가 부릅니다.
+
 ## 데이터
 
 영화진흥위원회 영화관입장권통합전산망(KOBIS)의 일별 박스오피스다. **API 키가

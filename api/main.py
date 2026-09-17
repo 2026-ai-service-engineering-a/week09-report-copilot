@@ -73,11 +73,16 @@ def health() -> dict:
 
 @app.get("/config")
 def read_config() -> dict:
-    """지금 이 서버가 무엇으로 도는가. **키는 내보내지 않는다.**"""
+    """지금 이 서버가 무엇으로 도는가. **키는 내보내지 않는다.**
+
+    화면이 이것을 읽어 "각본 대역으로 도는 중"인지 보여 준다. 모델 이름과
+    모드는 비밀이 아니라 정책이고, 키는 비밀이라 여기 없다.
+    """
+    found = config.provider()
     return {
         "mode": config.mode(),
         "model": config.pick_model(),
-        "gateway": config.gateway() or None,      # 주소만. 키는 아니다
+        "provider": found[0].removesuffix("_API_KEY").lower() if found else None,
         "dataReady": db.ready(),
         "rawSql": os.environ.get("ALLOW_RAW_SQL") == "1",
     }
