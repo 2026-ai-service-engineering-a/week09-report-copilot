@@ -9,11 +9,20 @@
 
 import pytest
 
-from core import db, offline
+from core import config, db, offline
 
 
 @pytest.fixture(autouse=True)
 def offline_mode(monkeypatch):
+    """**개발자의 `.env`에 기대지 않는다.**
+
+    키를 넣고 `LLM_MODEL`을 바꿔 둔 사람의 기계에서만 깨지는 테스트는
+    테스트가 아니다. 실제로 그렇게 한 번 깨졌다. 주변 환경을 먼저 비우고
+    각본 대역으로 고정한다.
+    """
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    for name, _ in config.PROVIDERS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LLM_MODE", "offline")
     monkeypatch.setattr(offline, "LATENCY_MS", 0)   # 테스트에서는 지연을 끈다
 

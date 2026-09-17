@@ -44,6 +44,25 @@ def wrap_untrusted(source: str, content: str) -> str:
     return f"{BOUNDARY_OPEN} source={source}>>>\n{content}\n{BOUNDARY_CLOSE}"
 
 
+_SCAFFOLD = re.compile(
+    rf"{re.escape(BOUNDARY_OPEN)}[^>]*>>>|{re.escape(BOUNDARY_CLOSE)}|\[\[node:\w+\]\]")
+
+
+def strip_boundary(text: str) -> str:
+    """우리가 모델에게 준 표시를 답에서 걷어낸다.
+
+    경계 마커도 `[[node:…]]` 표지도 **모델에게 주는 것**이지 사용자에게 보일
+    것이 아니다. 진짜 모델을 붙이자마자 둘 다 리포트 본문으로 새어 나왔다.
+    `<<<DATA source=run_query>>> {"error": …}`가 섹션 설명에 실렸고, 결론은
+    `[[node:narrate]]`로 시작했다.
+
+    각본 대역은 자기가 만든 문장만 돌려주니 이 함정을 덮고 있었다. **모델에게
+    준 것은 모델의 답에도 나올 수 있다**는 것을 잊기 쉽다.
+    """
+    cleaned = _SCAFFOLD.sub("", text or "")
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
 INJECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"지시(를|들)?\s*(전부|모두)?\s*무시"), "지시 무시 요구"),
     (re.compile(r"ignore\s+(all\s+)?(previous|prior)\s+instructions", re.I), "지시 무시 요구(영문)"),

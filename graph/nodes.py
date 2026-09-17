@@ -18,7 +18,7 @@ import datetime as dt
 import json
 
 from core import config, daterange, metrics, patch, schema, tools
-from core.harness import BudgetExceeded, scan_injection, wrap_untrusted
+from core.harness import BudgetExceeded, scan_injection, strip_boundary, wrap_untrusted
 from core.llm import completion
 from core.prompts import ANALYST, NARRATOR, PLANNER, VERIFIER, WRITER
 from graph import router
@@ -28,6 +28,38 @@ from graph.state import (
 from graph.state import guard as guard_event
 
 MAX_REPLANS = 2      # 한도는 숫자로 건다. 넘으면 답으로 알린다 (6주차)
+
+GROUP_AXES = frozenset(getattr(schema.GroupBy, "__args__", ()))
+
+
+def _report_title(start: dt.date, end: dt.date) -> str:
+    """문서 제목을 기간에서 만든다."""
+    if (start.year, start.month) == (end.year, end.month):
+        return f"{start.year}년 {start.month:02d}월 박스오피스 리포트"
+    if start.year == end.year:
+        return f"{start.year}년 {start.month}~{end.month}월 박스오피스 리포트"
+    return f"{start} ~ {end} 박스오피스 리포트"
+
+
+def _chart_for(said: str | None, axis: str | None, kind: str | None) -> str | None:
+    if kind == "table":
+        return None
+    if axis in (None, "month", "week"):
+        return "line"
+    return said if said in ("bar", "pie") else "bar"
+
+
+def _known_metric(said: str | None) -> str:
+    """모델이 넘긴 지표 이름을 우리 id로 옮긴다. 못 옮기면 기본값.
+
+    `audiCnt`처럼 표기만 다른 것은 `metrics.lookup`이 흡수하고, 아예 없는
+    것이면 조용히 기본 지표로 떨어뜨린다. 여기서 예외를 올리면 리포트 한
+    장이 통째로 날아가는데, 섹션 하나가 기본 지표로 그려지는 편이 낫다.
+    """
+    try:
+        return metrics.lookup(said or "").id
+    except Exception:
+        return "audi_cnt"
 
 
 def _asks_metric(said: str) -> bool:
@@ -76,7 +108,10 @@ def route_node(state: ReportState) -> dict:
         start, end, cut = found
         if (str(start), str(end)) != (period["from"], period["to"]):
             ops = [patch.replace("/period/from", str(start)),
-                   patch.replace("/period/to", str(end))]
+                   patch.replace("/period/to", str(end)),
+                   # **제목도 기간의 일부다.** 8월 리포트를 1~8월로 늘려 놓고
+                   # 제목만 "2026년 08월"로 두면 문서가 스스로 거짓말을 한다
+                   patch.replace("/title", _report_title(start, end))]
             report = patch.apply(report, ops)
             events.append(state_delta(ops))
             changed = True
@@ -180,13 +215,20 @@ def plan_node(state: ReportState) -> dict:
     # 섹션 하나를 더하는 것은 react 쪽(`react_plan_node`)의 일이다
     plan: list[dict] = []
     for index, spec in enumerate(sections[:5], start=1):
+        # 모델이 무엇을 빼먹어도 문서는 성립해야 한다. **제목을 못 받으면
+        # 지표와 축에서 만든다.** 진짜 모델을 붙이자 "제목 없음"이 세 줄
+        # 늘어섰다. 빠진 값을 메우는 자리는 스키마 바로 뒤가 맞다
+        metric = _known_metric(spec.get("metric"))
+        axis = spec.get("groupBy") if spec.get("groupBy") in GROUP_AXES else None
         plan.append(schema.Section(
             id=f"s{index}",
-            kind=spec.get("kind", "chart"),
-            title=spec.get("title", "제목 없음"),
-            metric=spec.get("metric", "audi_cnt"),
-            chart=spec.get("chart"),
-            group_by=spec.get("groupBy"),
+            kind=spec.get("kind") if spec.get("kind") in ("chart", "table") else "chart",
+            title=(spec.get("title") or "").strip() or _title(metric, axis),
+            metric=metric,
+            # 시간 축에는 선이 맞는다. 추세를 보려고 만든 축인데 막대로
+            # 그리면 앞뒤 관계가 보이지 않는다. 모델이 bar를 골라도 고친다
+            chart=_chart_for(spec.get("chart"), axis, spec.get("kind")),
+            group_by=axis,
             status="pending",
         ).model_dump(mode="json", by_alias=True))
 
@@ -224,7 +266,7 @@ def section_node(state: dict) -> dict:
                              "rows": [], "note": f"[중단] {e}"}], "events": events}
 
     calls = getattr(response.choices[0].message, "tool_calls", None) or []
-    observation, rows, total = "", [], None
+    observation, rows, total, failed = "", [], None, None
     for call in calls:
         observation = tools.run_tool(call.function.name, call.function.arguments)
         events.append(tool_call(call.function.name, json.loads(call.function.arguments or "{}"),
@@ -232,6 +274,17 @@ def section_node(state: dict) -> dict:
         parsed = json.loads(observation)
         rows = parsed.get("rows") or rows
         total = parsed.get("total", total)
+        failed = parsed.get("error") or failed
+
+    if failed or not rows:
+        # **조회가 실패하면 작성가를 부르지 않는다.** 부르면 오류 문자열을
+        # 문장으로 옮겨 적고, 그 문장이 리포트 본문이 된다. 모델 호출도
+        # 한 번 아낀다
+        events.append(step_finished(f"section:{section['id']}"))
+        return {"results": [{"id": section["id"], "status": "unverified", "rows": [],
+                             "total": None,
+                             "note": f"이 구간의 값을 가져오지 못했습니다: {failed or '결과 없음'}"}],
+                "events": events}
 
     findings = scan_injection(observation)
     if findings:
@@ -243,7 +296,9 @@ def section_node(state: dict) -> dict:
             f"{section['title']}\n"
             + wrap_untrusted("run_query", observation or "{}"),
         )
-        note = written.choices[0].message.content or ""
+        # 경계 마커는 모델에게 주는 표시다. 따라 적은 것을 그대로 두면
+        # 리포트 본문에 `<<<DATA …>>>`가 실려 나간다
+        note = strip_boundary(written.choices[0].message.content or "")
     except BudgetExceeded as e:
         events.append(guard_event("budget", str(e), stopped=True))
         note = f"[중단] {e}"
@@ -272,6 +327,7 @@ def collect_node(state: ReportState) -> dict:
             patch.replace(f"/sections/{index}/rows", result["rows"]),
             patch.replace(f"/sections/{index}/note", result["note"]),
             patch.replace(f"/sections/{index}/status", result["status"]),
+            patch.replace(f"/sections/{index}/total", result.get("total")),
         ]
     if not ops:
         return {"events": []}
@@ -299,15 +355,27 @@ def verify_node(state: ReportState) -> dict:
     ops: list[dict] = []
 
     for index, section in enumerate(report["sections"]):
+        rows = section.get("rows") or []
+        # **대조할 것이 없으면 판정하지 않는다.** 행이 비어 있으면 문장 속
+        # 모든 수가 "집계에 없는 수치"가 되고, 실패한 섹션 다섯 개가 전부
+        # 불일치로 잡혀 재계획을 두 번 더 돌았다
+        if not rows or section.get("status") != "ok":
+            continue
         claimed = _numbers(section.get("note") or "")
         if not claimed:
             continue
-        rows = section.get("rows") or []
         actual = {int(round(value)) for _, value in rows if isinstance(value, (int, float))}
         # 라벨에 박힌 수도 집계에서 온 것이다. 일자별 차트의 `2026-08-01`이
         # 그렇다. 값만 보고 대조하면 연도가 "집계에 없는 수치"로 잡힌다
         for label, _ in rows:
             actual |= _numbers(str(label))
+        # **총합도 집계에서 온 값이다.** 도구가 `total`로 함께 주고 작성가가
+        # 그것으로 비율을 계산한다. 행에만 있는 수로 대조하면 "전체 관객
+        # 86,977,809명"이 통째로 집계에 없는 수치가 된다
+        if section.get("total"):
+            actual.add(int(round(section["total"])))
+        # 행 값들의 합도 정당하다. 작성가가 직접 더했을 수 있다
+        actual.add(sum(int(round(v)) for _, v in rows if isinstance(v, (int, float))))
         # 비율(0~100)은 총합에서 나온 것이라 행 값에 없다. 대조 대상에서 뺀다
         stray = {n for n in claimed if n > 100} - actual
         if stray:
@@ -331,7 +399,7 @@ def narrate_node(state: ReportState) -> dict:
     unverified = [s["id"] for s in report["sections"] if s.get("status") == "unverified"]
     try:
         response = _ask_model(state, NARRATOR, notes)
-        conclusion = response.choices[0].message.content or ""
+        conclusion = strip_boundary(response.choices[0].message.content or "")
     except BudgetExceeded as e:
         conclusion = f"[중단] {e}"
     if unverified:
