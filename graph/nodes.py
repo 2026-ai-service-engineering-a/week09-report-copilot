@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
-from core import config, metrics, patch, schema, tools
+from core import config, daterange, metrics, patch, schema, tools
 from core.harness import BudgetExceeded, scan_injection, wrap_untrusted
 from core.llm import completion
 from core.prompts import ANALYST, NARRATOR, PLANNER, VERIFIER, WRITER
@@ -28,6 +28,15 @@ from graph.state import (
 from graph.state import guard as guard_event
 
 MAX_REPLANS = 2      # 한도는 숫자로 건다. 넘으면 답으로 알린다 (6주차)
+
+
+def _asks_metric(said: str) -> bool:
+    """지표를 말했는가. 기간만 바꾼 요청과 새 섹션 요청을 가른다."""
+    try:
+        metrics.lookup(said)
+        return True
+    except Exception:
+        return any(word in said for word in ("리포트", "보고서", "차트", "표", "섹션"))
 
 
 def _ask_model(state: ReportState, system: str, user: str, *, tools_on: bool = False):
@@ -48,15 +57,45 @@ def _ask_model(state: ReportState, system: str, user: str, *, tools_on: bool = F
 
 
 def route_node(state: ReportState) -> dict:
-    chosen, calls = router.route(state)
-    return {
-        "route": chosen,
-        "events": [
-            step_started("route"),
-            {"event": "route", "route": chosen, "llm_calls": calls},
-            step_finished("route"),
-        ],
-    }
+    """무엇을 할지 고르기 전에 **언제를 볼지부터 정한다.**
+
+    "2026년 1월부터"를 읽어 기간을 고치는 일은 코드가 한다. 표현의 가짓수가
+    정해져 있고 뜻이 하나뿐이라 모델에게 물을 이유가 없고, 무엇보다 날짜를
+    틀리면 리포트 전체가 틀린다 (`core/daterange.py`).
+
+    그리고 이 패치가 **화면 위쪽 칩을 바꿉니다.** 공유 상태가 눈에 보이는
+    가장 흔한 순간이 이것이다.
+    """
+    events: list[dict] = [step_started("route")]
+    report = dict(state["report"])
+    period = report["period"]
+
+    changed = False
+    found = daterange.parse(state.get("text") or "", current=(period["from"], period["to"]))
+    if found:
+        start, end, cut = found
+        if (str(start), str(end)) != (period["from"], period["to"]):
+            ops = [patch.replace("/period/from", str(start)),
+                   patch.replace("/period/to", str(end))]
+            report = patch.apply(report, ops)
+            events.append(state_delta(ops))
+            changed = True
+            if cut:
+                # 잘렸으면 잘렸다고 말한다. 조용히 자르면 사용자는 없는 구간이
+                # 0이라고 오해한다
+                events.append(guard_event("period", daterange.describe(start, end, cut=True)))
+
+    chosen, calls = router.route({**state, "report": report})
+    # **기간이 바뀌면 문서 전체가 낡는다.** 다른 할 일이 없으면 다시 채우는
+    # 것이 할 일이다. 절반은 1월, 절반은 8월인 리포트를 내놓지 않는다
+    # 기간 말고는 아무것도 말하지 않았으면 다시 채우기만 한다. 축도 지표도
+    # 말하지 않았는데 섹션을 새로 만들면 같은 그림이 두 장이 된다
+    only_period = changed and not said_axis(state.get("text") or "") and not _asks_metric(
+        state.get("text") or "")
+    if changed and (chosen == "apply" or only_period) and not state.get("ui_action"):
+        chosen = "refresh"
+    events += [{"event": "route", "route": chosen, "llm_calls": calls}, step_finished("route")]
+    return {"route": chosen, "report": report, "period_changed": changed, "events": events}
 
 
 # ── apply: 모델을 부르지 않는 길 ──────────────────────────────────────
@@ -309,6 +348,84 @@ def narrate_node(state: ReportState) -> dict:
 
 # ── react: 한 섹션만 만드는 짧은 길 ───────────────────────────────────
 
+_AXIS_WORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("month", ("월별", "달별", "월간")),
+    ("week", ("주별", "주간", "주차별")),
+    ("weekday", ("요일", "요일별")),
+    ("nation", ("국적", "나라", "국가")),
+    ("genre", ("장르",)),
+    ("distributor", ("배급",)),
+    ("watchGrade", ("등급",)),
+    ("movieType", ("영화구분", "예술영화", "독립영화")),
+    ("movieNm", ("영화별", "작품별", "상위", "순위", "톱")),
+]
+
+
+def said_axis(said: str) -> str | None:
+    """말에 **명시된** 축만 돌려준다. 없으면 None."""
+    for axis, words in _AXIS_WORDS:
+        if any(word in said for word in words):
+            return axis
+    return axis_for_span(said) if False else None
+
+
+def _span_days(period: dict) -> int:
+    try:
+        return (dt.date.fromisoformat(period["to"]) - dt.date.fromisoformat(period["from"])).days
+    except (ValueError, KeyError):
+        return 0
+
+
+def axis_for_span(period: dict) -> str | None:
+    """기간을 보고 시간 축을 고른다.
+
+    한 달이면 일자별이 읽히지만 1년치를 일자별로 그리면 점이 365개라 아무것도
+    안 보인다. 사용자가 축을 말하지 않았다고 해서 읽을 수 없는 그림을 내놓는
+    것은 도움이 아니다.
+    """
+    span = _span_days(period)
+    if span > 180:
+        return "month"
+    if span > 45:
+        return "week"
+    return None
+
+
+def _axis_of(said: str, period: dict) -> str | None:
+    return said_axis(said) or axis_for_span(period)
+
+
+def retune(section: dict, period: dict) -> dict | None:
+    """기간이 바뀐 뒤 섹션의 시간 축을 다시 고른다.
+
+    한 달짜리 리포트에서 만든 일자별 차트를 1년으로 늘리면 점이 365개가 된다.
+    **범주 축(국적·장르 같은 것)은 건드리지 않는다.** 기간이 바뀌어도 나누는
+    기준이 달라질 이유가 없기 때문이다.
+    """
+    if section.get("groupBy") not in (None, "month", "week"):
+        return None
+    wanted = axis_for_span(period)
+    if wanted == section.get("groupBy"):
+        return None
+    return {**section, "groupBy": wanted,
+            "title": _title(section["metric"], wanted)}
+
+
+def _title(metric_id: str, axis: str | None) -> str:
+    """제목은 지표와 축에서 만든다. **사용자가 친 문장을 그대로 쓰지 않는다.**
+
+    "2026년도 전체 1월부터 월별 관객수를 보여줘"가 섹션 제목이 되면 문서가
+    아니라 대화 기록이 된다.
+    """
+    try:
+        name = metrics.by_id(metric_id).name
+    except Exception:
+        name = metric_id
+    label = {"month": "월별", "week": "주별", "weekday": "요일별", "nation": "국적별",
+             "genre": "장르별", "movieType": "구분별", "watchGrade": "등급별",
+             "distributor": "배급사별", "movieNm": "영화별"}.get(axis or "", "일별")
+    return f"{label} {name}"
+
 
 def react_plan_node(state: ReportState) -> dict:
     """조회 한 번이면 끝나는 요청. 계획 없이 섹션 하나를 세운다."""
@@ -317,24 +434,42 @@ def react_plan_node(state: ReportState) -> dict:
         metric = metrics.lookup(said).id
     except Exception:
         metric = "audi_cnt"
-    axis = None
-    for key, words in (("nation", ("국적", "나라")), ("genre", ("장르",)),
-                       ("distributor", ("배급",)), ("movieNm", ("영화", "상위", "순위"))):
-        if any(word in said for word in words):
-            axis = key
-            break
-
+    axis = _axis_of(said, state["report"]["period"])
     report = dict(state["report"])
+    retuned: list[list[dict]] = []
+    # 기간이 바뀌었으면 이미 있던 섹션도 낡았다. 새 섹션과 함께 다시 채운다
+    stale = []
+    if state.get("period_changed"):
+        for index, old in enumerate(report["sections"]):
+            tuned = retune(old, report["period"])
+            if tuned:
+                ops = [patch.replace(f"/sections/{index}/groupBy", tuned["groupBy"]),
+                       patch.replace(f"/sections/{index}/title", tuned["title"])]
+                report = patch.apply(report, ops)
+                retuned.append(ops)
+            stale.append(report["sections"][index])
     section = schema.Section(
         id=schema.next_section_id(schema.Report.model_validate(report)),
         kind="table" if axis == "movieNm" else "chart",
-        chart=None if axis == "movieNm" else "bar",
-        title=said[:40] or "조회 결과", metric=metric, group_by=axis, status="pending",
+        chart=None if axis == "movieNm" else ("line" if axis in ("month", "week", None) else "bar"),
+        title=_title(metric, axis), metric=metric, group_by=axis, status="pending",
     ).model_dump(mode="json", by_alias=True)
+    # **같은 것을 두 번 그리지 않는다.** 지표와 축이 같으면 이미 있는 섹션이고,
+    # 기간이 바뀌어 다시 채우는 중이라면 그것으로 충분하다. 이 확인이 없으면
+    # "월별 관객수"가 두 장 생긴다
+    twin = next((sec for sec in report["sections"]
+                 if sec["metric"] == metric and sec.get("groupBy") == axis), None)
+    if twin:
+        plan = stale or [twin]
+        if twin not in plan:
+            plan = plan + [twin]
+        return {"report": report, "plan": plan, "results": [],
+                "events": [state_delta(sum(retuned, []))] if retuned else []}
+
     ops = [patch.add("/sections/-", section)]
     report = patch.apply(report, ops)
-    return {"report": report, "plan": [section],
-            "events": [state_delta(ops)]}
+    return {"report": report, "plan": stale + [section], "results": [],
+            "events": [state_delta(sum(retuned, []) + ops)]}
 
 
 # ── 발행: 되돌리기 어려운 행동 앞의 승인 카드 ────────────────────────
@@ -381,3 +516,31 @@ def publish_node(state: ReportState) -> dict:
         state_delta(ops),
         text(f"발행했습니다. 섹션 {len(sections)}개가 공유 링크에 담겼습니다.", final=True),
     ]}
+
+
+# ── refresh: 기간이 바뀌어 문서 전체가 낡은 경우 ─────────────────────
+
+
+def refresh_node(state: ReportState) -> dict:
+    """섹션을 새로 만들지 않고 **있던 것을 다시 채운다.**
+
+    사용자가 "1월부터 보여줘"라고만 했을 때 여기로 온다. 무엇을 볼지는 그대로고
+    언제를 볼지만 바뀐 것이므로, 계획을 다시 세울 이유가 없다. 계획 노드를
+    부르지 않으므로 모델 호출도 그만큼 줄어든다.
+    """
+    report = dict(state["report"])
+    sections = report["sections"]
+    if not sections:
+        return {"plan": [], "events": [text("먼저 볼 것을 정해 주세요.", final=True)]}
+
+    ops: list[dict] = []
+    for index, old in enumerate(sections):
+        tuned = retune(old, report["period"])
+        if tuned:
+            ops += [patch.replace(f"/sections/{index}/groupBy", tuned["groupBy"]),
+                    patch.replace(f"/sections/{index}/title", tuned["title"])]
+        ops.append(patch.replace(f"/sections/{index}/status", "pending"))
+    report = patch.apply(report, ops)
+    sections = report["sections"]
+    return {"report": report, "plan": list(sections), "results": [],
+            "events": [step_started("refresh"), state_delta(ops), step_finished("refresh")]}

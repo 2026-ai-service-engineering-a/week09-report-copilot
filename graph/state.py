@@ -65,7 +65,8 @@ class ReportState(TypedDict, total=False):
     text: str                    # 사용자가 친 한 줄
     ui_action: dict | None       # 화면 조작 (버튼·드래그). 있으면 모델을 안 부른다
     selected: str | None         # 화면에서 고른 섹션 id. **"이거"가 무엇인지가 여기 있다**
-    route: str                   # apply · one · react · plan
+    route: str                   # apply · one · react · plan · publish · refresh
+    period_changed: bool         # 기간이 바뀌었으면 있던 섹션도 낡는다
     plan: list[dict]             # 계획 노드가 만든 섹션 목록
     results: Annotated[list[dict], operator.add]   # 섹션별 결과 (병렬로 쌓인다)
     events: Annotated[list[dict], operator.add]    # 밖으로 내보낼 이벤트

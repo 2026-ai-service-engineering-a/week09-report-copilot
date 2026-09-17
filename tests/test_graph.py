@@ -93,3 +93,39 @@ def test_rejection_is_a_result_not_an_error():
     replies = [e["text"] for e in events if e["event"] == "text"]
     assert final["report"]["publishedAt"] is None
     assert replies and "발행하지 않았습니다" in replies[0]
+
+
+def test_period_is_parsed_by_code_not_the_model(needs_db):
+    """"2026년 1월부터"를 읽는 것은 코드다. 날짜를 틀리면 리포트 전체가 틀린다."""
+    events, final, route = collect("2026년도 전체 1월부터 월별 관객수를 보여줘")
+    assert final["report"]["period"] == {"from": "2026-01-01", "to": "2026-08-31"}
+    # 없는 구간을 요청했으므로 잘랐다고 알려 줘야 한다
+    assert any(e["event"] == "guard" and e["check"] == "period" for e in events)
+    month = [s for s in final["report"]["sections"] if s["groupBy"] == "month"]
+    assert month and len(month[0]["rows"]) == 8
+
+
+def test_period_only_request_refreshes_instead_of_adding(needs_db):
+    """기간만 바꾼 요청에 섹션을 새로 만들면 같은 그림이 두 장이 된다."""
+    doc = empty_report().dump()
+    _, first, _ = collect("월별 관객수 보여줘", doc=doc)
+    _, second, route = collect("3월부터 6월까지", doc=first["report"])
+    assert route == "refresh"
+    assert len(second["report"]["sections"]) == len(first["report"]["sections"])
+
+
+def test_axis_retunes_when_the_period_grows(needs_db):
+    """한 달짜리 일별 차트를 1년으로 늘리면 점이 365개가 된다."""
+    doc = empty_report().dump()
+    assert doc["sections"][0]["groupBy"] is None          # 처음에는 일자별
+    _, final, _ = collect("2026년 1월부터 보여줘", doc=doc)
+    assert final["report"]["sections"][0]["groupBy"] == "month"
+    assert final["report"]["sections"][0]["title"] == "월별 관객수"
+
+
+def test_the_same_chart_is_not_drawn_twice(needs_db):
+    doc = empty_report().dump()
+    _, first, _ = collect("국적별로 보여줘", doc=doc)
+    _, second, _ = collect("국적별 관객수 보여줘", doc=first["report"])
+    axes = [s["groupBy"] for s in second["report"]["sections"]]
+    assert axes.count("nation") == 1

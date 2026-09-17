@@ -9,6 +9,7 @@
  * 나가고, 그래서 "이거 빼줘"가 통한다. **이 한 가지가 v1과 v2의 차이다.**
  */
 import { Chart, Table } from './Chart'
+import type { Touched } from '../patch'
 import type { ChartKind, Report, Section } from '../types'
 
 type Props = {
@@ -16,7 +17,7 @@ type Props = {
   selected: string | null
   onSelect(id: string | null): void
   onAction(action: Record<string, unknown>): void
-  hot: Set<number>
+  hot: Touched
   /** 고르기는 늘 된다. **v1에서도 사용자는 섹션을 고를 수 있다.**
    *  못 고르는 것이 아니라, 고른 것이 요청에 실리지 않는 것이 v1이다 */
   editable: boolean
@@ -32,12 +33,13 @@ const STATUS_LABEL: Record<Section['status'], string> = {
 export function ReportView({ report, selected, onSelect, onAction, hot, editable }: Props) {
   return (
     <section className="doc">
-      <header className="doc-head">
+      <header className={`doc-head ${hot.head ? 'is-hot' : ''}`}>
         <h2>{report.title}</h2>
         <p className="meta">
           <span>{report.period.from} ~ {report.period.to}</span>
           <span>국적 {report.filters.nation}</span>
           <span>구분 {report.filters.movieType}</span>
+          {report.publishedAt && <span className="pub">발행됨</span>}
         </p>
       </header>
 
@@ -51,7 +53,7 @@ export function ReportView({ report, selected, onSelect, onAction, hot, editable
           className={[
             'section',
             selected === section.id ? 'is-selected' : '',
-            hot.has(index) || hot.has(-1) ? 'is-hot' : '',
+            hot.sections.has(index) || hot.sections.has(-1) ? 'is-hot' : '',
             section.status === 'pending' ? 'is-pending' : '',
           ].join(' ')}
           onClick={() => onSelect(selected === section.id ? null : section.id)}
@@ -98,7 +100,7 @@ export function ReportView({ report, selected, onSelect, onAction, hot, editable
       ))}
 
       {report.conclusion && (
-        <footer className={`conclusion ${hot.has(-2) ? 'is-hot' : ''}`}>
+        <footer className={`conclusion ${hot.conclusion ? 'is-hot' : ''}`}>
           <strong>결론</strong>
           <p>{report.conclusion}</p>
         </footer>
