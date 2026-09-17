@@ -18,10 +18,13 @@ import os
 
 OFFLINE_MODEL = "offline/scripted-analyst"
 
-# 키가 있는 프로바이더를 찾아 기본 모델을 고른다. 리포트 노드가 여럿이라
-# 빠르고 싼 모델이 맞는다. 바꾸려면 `.env`의 LLM_MODEL을 쓴다
+# 키가 있는 프로바이더를 찾아 기본 모델을 고른다. 바꾸려면 `.env`의 LLM_MODEL.
+#
+# **한 요청에 모델을 여러 번 부른다.** 리포트 하나에 분류 1 + 계획 1 +
+# 섹션마다 2 + 결론 1이고, 섹션이 넷이면 열 번이다. 그래서 기본은 각 계열의
+# 가장 빠르고 싼 모델이다. 도구 호출만 되면 이 랩에는 충분하다.
 PROVIDERS: list[tuple[str, str]] = [
-    ("GEMINI_API_KEY", "gemini/gemini-2.5-flash"),
+    ("GEMINI_API_KEY", "gemini/gemini-3.5-flash-lite"),
     ("OPENAI_API_KEY", "openai/gpt-4o-mini"),
     ("ANTHROPIC_API_KEY", "anthropic/claude-haiku-4-5-20251001"),
 ]
