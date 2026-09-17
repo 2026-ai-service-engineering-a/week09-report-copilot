@@ -1,0 +1,20 @@
+# api 한 서비스가 전부 쓴다. 문이 여럿이던 8주차와 달리 이번 주는
+# 코어와 문이 한 프로세스에 산다 (교안 2장 2절).
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+sse-starlette>=2.1,<4
+
+# 9주차에 새로 들어오는 것은 이 한 줄뿐이다.
+# 이벤트 이름과 필드가 자라는 중이라 핀을 박는다. 교안 4장의 "36종"과
+# 이벤트 캡처가 이 버전 기준이다 (docs/week09-agui-capture.md)
+ag-ui-protocol>=0.1.22,<0.2
+
+# 7주차 자산. 그래프는 여기서 선언하고 모델 호출은 여전히 litellm이 한다
+langgraph>=0.2,<2
+
+litellm>=1.74,<2
+pydantic>=2.10,<3
+psycopg[binary]>=3.2,<4
+httpx>=0.27,<1
+PyYAML>=6.0,<7
+pytest>=8.3,<9

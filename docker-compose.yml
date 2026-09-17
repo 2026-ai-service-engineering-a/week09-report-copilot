@@ -1,0 +1,90 @@
+# 9주차 실습 랩 — 화면과 에이전트가 같은 문서를 본다.
+#
+#   cp .env.sample .env             # 키는 없어도 된다 (각본 대역이 대신 답한다)
+#   docker compose up --build -d
+#   docker compose exec api python -m scripts.load_data
+#   열어 볼 곳: http://localhost:3000 (화면) · http://localhost:8000/docs (계약)
+#   docker compose exec api pytest
+#
+# 8주차와 다른 점이 하나 있다. 그때는 문이 주제라 api와 mcp를 일부러 갈랐고,
+# 이번 주는 **상태가 하나**라는 것이 주제라 문을 한 프로세스에 둔다.
+# 분리와 합침의 기준은 취향이 아니라 무엇을 보이려는가에 있다 (교안 2장 2절).
+services:
+  api:                                   # AG-UI 엔드포인트 + 그래프 + 코어
+    build: .
+    image: week09-report-copilot
+    # 앱이 쥐는 것은 이게 전부다. 프로바이더 키도 마스터 키도 없다.
+    # 모델로 나가는 길은 게이트웨이 하나뿐이다 (8주차 8장)
+    environment:
+      LLM_MODE: ${LLM_MODE:-auto}
+      GATEWAY_URL: ${GATEWAY_URL:-}
+      GATEWAY_KEY: ${GATEWAY_KEY:-}
+      GATEWAY_MODEL: ${GATEWAY_MODEL:-}
+      # 모델이 질의를 짠다. 그래서 앱이 쥐는 연결도 읽기 전용이다 (교안 9장 1절).
+      # 게이트가 뚫려도 DB 권한이 한 층 더 막는다
+      DATABASE_URL: postgresql://reader:reader@db:5432/boxoffice
+      # 적재 스크립트만 쓰기 권한이 필요하다
+      ADMIN_DATABASE_URL: postgresql://report:report@db:5432/boxoffice
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:                                   # 화면. v0~v3 네 모드가 한 앱에 있다
+    build: ./web                         # React + Vite를 빌드해 nginx가 낸다
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  db:                                    # 박스오피스 집계 + 리포트 문서 + 게이트웨이 장부
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: report
+      POSTGRES_PASSWORD: report
+      POSTGRES_DB: boxoffice
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 읽기 전용 계정과 게이트웨이용 데이터베이스를 처음 기동에 만든다
+      - ./scripts/initdb.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U report -d boxoffice"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  gateway-init:                          # 첫 기동 준비. 한 번 돌고 끝난다
+    build: .                             # 관리자 화면에서 키를 만들려면 고를
+    image: week09-report-copilot         # 조직이 하나는 있어야 한다 (8주차 8장 3절)
+    env_file: gateway/.env
+    command: python gateway/init.py
+    volumes:
+      - .:/app
+    restart: "no"
+    depends_on:
+      - litellm-proxy
+
+  litellm-proxy:                         # 뒷문. 8주차 자산을 그대로 가져왔다
+                                         # 관리자 화면은 :4000/ui/ (admin / 마스터 키)
+    image: ghcr.io/berriai/litellm-database:main-stable
+    env_file: gateway/.env
+    environment:
+      DATABASE_URL: postgresql://report:report@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./gateway/config.yaml:/app/config.yaml:ro
+    ports:
+      # 이 기계에서만 연다. 마스터 키가 교안에 적힌 기본값이라 같은 망의 다른
+      # 기계에 관리자 화면을 열어 주면 게이트웨이를 통째로 내주는 셈이다
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:                                # 데이터·리포트·장부. 초기화는 down -v 로만

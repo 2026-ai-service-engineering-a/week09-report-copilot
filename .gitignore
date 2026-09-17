@@ -1,0 +1,10 @@
+.env
+gateway/.env
+__pycache__/
+*.pyc
+.pytest_cache/
+# 스크립트가 받아 채우는 자리. 원본을 저장소에 넣지 않는다 (README 참고)
+data/*.csv
+data/*.json
+node_modules/
+web/dist/
