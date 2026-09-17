@@ -85,7 +85,7 @@ docker compose exec api python -m scripts.load_data
 
 ```sh
 # .env — 셋 중 하나만
-GEMINI_API_KEY=…        # → gemini/gemini-2.5-flash
+GEMINI_API_KEY=…        # → gemini/gemini-3.5-flash-lite
 OPENAI_API_KEY=…        # → openai/gpt-4o-mini
 ANTHROPIC_API_KEY=…     # → anthropic/claude-haiku-4-5-20251001
 
