@@ -27,6 +27,7 @@ def run(
     ui_action: dict | None = None,
     selected: str | None = None,
     simulate: str | None = None,
+    tool_result: dict | None = None,
     max_cost_usd: float = DEFAULT_MAX_COST_USD,
 ) -> Iterator[dict]:
     """요청 하나. 마지막 이벤트는 항상 `final` 하나다.
@@ -41,6 +42,8 @@ def run(
         "text": text,
         "ui_action": ui_action,
         "selected": selected,
+        # 프런트엔드 도구의 답. 승인 카드를 누른 뒤의 두 번째 요청에 실려 온다
+        "tool_result": tool_result,
         "simulate": simulate,
         "budget": guard,
         "replans": 0,

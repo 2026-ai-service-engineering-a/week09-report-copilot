@@ -23,10 +23,16 @@ export type AguiEvent = {
   [key: string]: unknown
 }
 
+export type ToolCall = { id: string; name: string; args: any; result?: any }
+
 export type Handlers = {
   onSnapshot(doc: Report): void
   onDelta(ops: Op[], next: Report): void
   onText(id: string, full: string, done: boolean): void
+  /** 도구 호출 하나가 끝났다. **생성 UI와 승인 카드가 여기서 갈린다.**
+   *  결과가 있으면 우리가 그려 주기만 하면 되고(생성 UI),
+   *  없으면 화면이 실행 주체다(프런트엔드 도구). */
+  onToolCall(call: ToolCall): void
   onEvent(event: AguiEvent): void
   onDone(result: unknown): void
   onError(message: string): void
@@ -36,6 +42,8 @@ export type Handlers = {
 export type ForwardedProps = {
   selectedSectionId?: string | null
   uiAction?: Record<string, unknown>
+  /** 프런트엔드 도구의 답. 승인 카드를 누른 뒤의 두 번째 요청에 실린다 */
+  toolResult?: { name: string; value: string }
   simulate?: string
   maxCostUsd?: number
 }
@@ -76,6 +84,7 @@ export async function runAgent(
 
   let doc: Report | null = state
   const texts = new Map<string, string>()
+  const calls = new Map<string, ToolCall>()
 
   // SSE는 프레임 사이가 빈 줄이다. 청크 경계가 프레임 경계와 다르므로
   // 남는 조각(buffer)을 들고 다음 청크와 이어 붙여야 한다
@@ -136,6 +145,36 @@ export async function runAgent(
         case 'TEXT_MESSAGE_END':
           handlers.onText(event.messageId as string, texts.get(event.messageId as string) ?? '', true)
           break
+
+        case 'TOOL_CALL_START':
+          calls.set(event.toolCallId as string,
+                    { id: event.toolCallId as string, name: event.toolCallName as string, args: '' })
+          break
+
+        case 'TOOL_CALL_ARGS': {
+          // 인자도 조각으로 온다. 모델이 JSON을 토큰 단위로 뱉기 때문이다
+          const call = calls.get(event.toolCallId as string)
+          if (call) call.args = (call.args ?? '') + (event.delta as string)
+          break
+        }
+
+        case 'TOOL_CALL_END': {
+          const call = calls.get(event.toolCallId as string)
+          if (!call) break
+          try { call.args = JSON.parse(call.args) } catch { /* 조각이 덜 왔을 수 있다 */ }
+          // 결과가 따라오지 않는 호출이 **프런트엔드 도구**다. RUN_FINISHED까지
+          // 기다렸다가 결과가 없으면 화면이 실행 주체라고 판단한다
+          window.setTimeout(() => { if (!calls.get(call.id)?.result) handlers.onToolCall(call) }, 0)
+          break
+        }
+
+        case 'TOOL_CALL_RESULT': {
+          const call = calls.get(event.toolCallId as string)
+          if (!call) break
+          try { call.result = JSON.parse(event.content as string) } catch { call.result = event.content }
+          handlers.onToolCall(call)
+          break
+        }
 
         case 'RUN_ERROR':
           // 스트림이 시작된 뒤의 실패는 상태 코드로 오지 않는다.

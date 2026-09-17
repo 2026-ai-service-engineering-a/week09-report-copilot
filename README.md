@@ -23,12 +23,16 @@ AI 서비스 엔지니어링 Track A **9주차 실습 랩**. 박스오피스 리
 | `v2` | AI가 화면 **안에** | AG-UI 공유 상태. `STATE_DELTA` |
 | `v3` | AI가 화면을 **만든다** | 생성 UI와 승인 카드 |
 
+같은 한마디를 모드를 바꿔 가며 쳐 보는 것이 이 랩의 첫 실습이다. 섹션을
+고른 채 "이거 빼줘"라고 하면 v1은 되묻고 v2는 지운다. **모델도 그래프도
+같은 것을 쓴다.** 갈린 것은 요청이 선택을 실어 오느냐 하나뿐이다.
+
 화면 왼쪽 위에서 모드를 바꾸면 같은 코어에 다른 껍데기가 붙는다.
 
 ## 빠른 시작
 
 ```sh
-git clone git@codecompose:2026-ai-service-engineering-a/week09-report-copilot.git
+git clone https://github.com/2026-ai-service-engineering-a/week09-report-copilot.git
 cd week09-report-copilot
 cp .env.sample .env
 docker compose up --build -d

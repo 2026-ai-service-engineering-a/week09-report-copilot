@@ -9,6 +9,7 @@
 | `text` | `TEXT_MESSAGE_START` · `CONTENT`×N · `END` |
 | `tool_call` | `TOOL_CALL_START` · `ARGS` · `END` · `RESULT` |
 | `state_snapshot` · `state_delta` | `STATE_SNAPSHOT` · `STATE_DELTA` |
+| `ask` | `TOOL_CALL_START` · `ARGS` · `END` (**RESULT는 화면이 만든다**) |
 | `guard` · `route` | `CUSTOM` |
 | `final` | `RUN_FINISHED` |
 
@@ -84,6 +85,18 @@ def translate(event: dict, *, thread_id: str, run_id: str) -> list:
                                 content=event["result"]),
         ]
 
+    if kind == "ask":
+        # **프런트엔드 도구**는 결과를 여기서 만들지 않는다. 호출만 내보내고
+        # 실행을 끝낸다. 화면이 카드를 띄우고, 사용자가 누르면 그 답을 실은
+        # 새 요청이 온다. 루프가 멈춰 기다리는 것이 아니라 두 번 도는 것이다
+        call_id = _short()
+        return [
+            ToolCallStartEvent(tool_call_id=call_id, tool_call_name=event["tool"]),
+            ToolCallArgsEvent(tool_call_id=call_id,
+                              delta=json.dumps(event["args"], ensure_ascii=False)),
+            ToolCallEndEvent(tool_call_id=call_id),
+        ]
+
     if kind in ("guard", "route"):
         # 규격에 딱 맞는 칸이 없는 것은 CUSTOM으로 보낸다. 억지로 다른 이벤트에
         # 끼워 넣으면 받는 쪽이 그것을 표준 의미로 읽는다
@@ -123,6 +136,10 @@ async def agent(input: RunAgentInput, request: Request):
             ui_action=props.get("uiAction"),
             selected=props.get("selectedSectionId"),
             simulate=props.get("simulate"),
+            # 승인 카드를 누른 뒤의 두 번째 요청이 이것을 실어 온다.
+            # **브라우저에서 오는 값이므로 그대로 믿지 않는다.** 무엇을 할지는
+            # 서버의 publish_node가 다시 정한다 (교안 9장 4절)
+            tool_result=props.get("toolResult"),
             max_cost_usd=float(props.get("maxCostUsd") or 0.20),
         )
 

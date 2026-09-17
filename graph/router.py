@@ -19,10 +19,12 @@ from core import config
 from core.llm import completion
 from core.prompts import ROUTER
 
-ROUTES = ("apply", "one", "react", "plan")
+ROUTES = ("apply", "one", "react", "plan", "publish")
 
 # 코드가 잡는 것들. 말이 짧고 뜻이 하나뿐이라 모델에게 물을 이유가 없다
 CERTAIN = [
+    # 되돌리기 어려운 행동도 코드가 잡는다. 모델의 해석에 맡길 자리가 아니다
+    (re.compile(r"(발행|공유\s*링크|내보내)"), "publish"),
     (re.compile(r"(막대|바|bar)\s*(차트)?로"), "apply"),
     (re.compile(r"(선|라인|line)\s*(차트)?로"), "apply"),
     (re.compile(r"(파이|원|pie)\s*(차트)?로"), "apply"),
@@ -50,8 +52,16 @@ def classify(text: str, *, simulate: str | None = None) -> tuple[str, int]:
     return "react", 1          # 못 알아들으면 가장 무난한 쪽으로
 
 
+# 프런트엔드 도구의 답은 **물어본 노드로 돌아간다.** 승인 카드를 누른 뒤의
+# 두 번째 요청에는 사용자가 친 말이 없으므로, 분류를 하면 엉뚱한 데로 간다
+ASKED_BY = {"confirm_publish": "publish"}
+
+
 def route(state: dict) -> tuple[str, int]:
-    """화면 조작이면 모델을 아예 부르지 않는다."""
+    """화면에서 온 것이면 모델을 아예 부르지 않는다."""
+    answer = state.get("tool_result") or {}
+    if answer.get("name") in ASKED_BY:
+        return ASKED_BY[answer["name"]], 0
     if state.get("ui_action"):
         return "apply", 0
     return classify(state.get("text") or "", simulate=state.get("simulate"))
