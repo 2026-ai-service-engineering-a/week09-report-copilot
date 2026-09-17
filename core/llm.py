@@ -1,15 +1,19 @@
-"""LLM 호출의 단일 통로. 8주차 `core/llm.py`와 같은 자리다.
+"""LLM 호출의 단일 통로.
 
-이 저장소에서 모델로 나가는 길은 **여기 하나뿐이고, 그 끝은 언제나
-게이트웨이다.** 앱에는 프로바이더 키가 없다.
+5주차에서 배운 대로 생성 호출은 전부 litellm을 지나간다. 이 랩에서 모델로
+나가는 길은 **여기 하나뿐이다.**
 
 하는 일 셋.
 
   ① 각본 대역으로의 분기 — 키가 없어도 수업이 돌아가게 (core/offline.py)
-  ② 게이트웨이 주소·가상키 주입 — 호출 코드는 그대로 두고 주소만 바꾼다
+  ② 프로바이더 직접 호출 — 8주차와 달리 게이트웨이를 거치지 않는다
   ③ 실패의 번역 — litellm 예외를 core/errors.py의 종류로 바꾼다.
      이 자리가 없으면 그래프가 litellm 예외를 직접 알아야 하고, 그러면
      "코어는 위를 모른다"가 깨진다.
+
+**게이트웨이를 걷어낸 것이 8주차를 뒤집는 것이 아니다.** 8주차 8장의 판단
+그대로다. 앱이 하나면 직접 호출이 맞고, 게이트웨이는 부르는 곳이 둘 이상이
+되거나 키를 남에게 나눠줘야 할 때부터 값을 한다.
 """
 
 from core import config, offline
@@ -30,28 +34,20 @@ def completion(*, simulate: str | None = None, **kwargs):
     if config.mode() == "offline":
         return offline.completion(simulate=simulate, **kwargs)
 
-    if not config.gateway():
+    if not config.provider() and not kwargs.get("api_key"):
         raise UpstreamError(
-            "LLM_MODE=live인데 GATEWAY_URL이 없다. 이 랩의 앱은 프로바이더를 "
-            "직접 부르지 않는다. .env에 게이트웨이 주소와 가상키를 넣는다"
-        )
-    if not config.gateway_key():
-        # 비워 두면 litellm이 환경의 다른 키를 대신 보내고, 게이트웨이는 모르는
-        # 키라며 거절한다. 원인을 짚기 어려우므로 여기서 먼저 막는다
-        raise UpstreamError(
-            "GATEWAY_URL은 있는데 GATEWAY_KEY가 비어 있다. "
-            "관리자 화면(:4000/ui/)에서 가상키를 발급해 .env에 넣고 "
+            "LLM_MODE=live인데 프로바이더 키가 없다. .env에 "
+            f"{' 또는 '.join(name for name, _ in config.PROVIDERS)} 중 하나를 넣고 "
             "docker compose up -d --force-recreate api 로 다시 만든다"
         )
 
     from litellm import completion as litellm_completion
 
-    kwargs["api_base"] = config.gateway()
-    kwargs["api_key"] = config.gateway_key()
     try:
         return litellm_completion(**kwargs)
     except Exception as e:
         name = type(e).__name__
         if "Timeout" in name:
             raise UpstreamTimeout(str(e)) from e
-        raise UpstreamError(f"{name}: {e}") from e
+        # 원인을 짚기 쉽게 모델 이름을 함께 싣는다. 키는 절대 싣지 않는다
+        raise UpstreamError(f"{name}: {e} (model={kwargs.get('model')})") from e

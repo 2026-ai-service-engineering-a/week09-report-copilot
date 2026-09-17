@@ -12,6 +12,7 @@ ag-ui-protocol>=0.1.22,<0.2
 # 7주차 자산. 그래프는 여기서 선언하고 모델 호출은 여전히 litellm이 한다
 langgraph>=0.2,<2
 
+# 프로바이더를 직접 부른다. 9주차에는 게이트웨이가 없다 (교안 2장 2절)
 litellm>=1.74,<2
 pydantic>=2.10,<3
 psycopg[binary]>=3.2,<4

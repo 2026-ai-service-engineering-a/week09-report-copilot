@@ -32,7 +32,8 @@ curl -s localhost:8000/health
   것의 목록이 곧 이 파일이다. 여기 없는 필드는 어떤 경로로도 바뀌지 않는다
 - **모델이 질의를 짠다.** 그래서 게이트가 둘이다. `core/harness.py`의
   `gate_query`가 첫 층, DB의 `reader` 계정 권한이 둘째 층. 어느 하나도 빼지 않는다
-- 모델 문자열은 `core/config.py`에만 둔다
+- 모델 문자열은 `core/config.py`에만 둔다. **게이트웨이는 쓰지 않는다.**
+  앱이 하나라 직접 호출이 맞고, 그 판단의 근거는 8주차 8장에 있다
 - **키가 없어도 돌아야 한다.** 각본 대역(`core/offline.py`)이 기본 경로이고
   테스트는 네트워크 없이 통과한다
 - `data/`의 CSV는 저장소에 넣지 않는다. `scripts/fetch_boxoffice.py`가 받아 온다

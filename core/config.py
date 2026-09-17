@@ -1,28 +1,38 @@
-"""모델 선택과 실행 모드. 8주차 `core/config.py` 그대로다.
+"""모델 선택과 실행 모드.
 
-이 랩의 앱도 프로바이더를 직접 부르지 않는다. 모델로 나가는 길은 게이트웨이
-하나뿐이고, 앱이 쥐는 것은 주소와 가상키 두 개다.
+**9주차에는 게이트웨이가 없다.** 8주차에 세운 판단 그대로다. 게이트웨이는
+부르는 곳이 둘 이상이 되거나 키를 남에게 나눠줘야 할 때부터 값을 하고,
+그 전에는 장애점을 하나 늘릴 뿐이다. 이 랩은 앱이 하나이므로 프로바이더를
+직접 부른다. 10\~14주차 개인 프로젝트도 대개 이쪽이다.
 
-  · offline  게이트웨이가 없다. 각본 대역이 대신 답한다 (기본값)
-  · live     게이트웨이가 있다. 진짜 호출이 그쪽으로 나간다
+모드는 둘이다.
+
+  · offline  키가 없다. 각본 대역이 대신 답한다 (기본값)
+  · live     키가 있다. 진짜 호출이 나간다
+
+키는 서버 컨테이너에만 있다. **브라우저 번들에는 들어가지 않는다.** 화면은
+우리 api만 부르고 모델은 서버가 부른다 (교안 11장 5절).
 """
 
 import os
 
 OFFLINE_MODEL = "offline/scripted-analyst"
 
-# 게이트웨이 뒤의 기본 별명. gateway/config.yaml의 model_name 중 하나다
-DEFAULT_GATEWAY_MODEL = "report"
+# 키가 있는 프로바이더를 찾아 기본 모델을 고른다. 리포트 노드가 여럿이라
+# 빠르고 싼 모델이 맞는다. 바꾸려면 `.env`의 LLM_MODEL을 쓴다
+PROVIDERS: list[tuple[str, str]] = [
+    ("GEMINI_API_KEY", "gemini/gemini-2.5-flash"),
+    ("OPENAI_API_KEY", "openai/gpt-4o-mini"),
+    ("ANTHROPIC_API_KEY", "anthropic/claude-haiku-4-5-20251001"),
+]
 
 
-def gateway() -> str:
-    """게이트웨이 주소. 비어 있으면 각본 대역으로 돈다."""
-    return os.environ.get("GATEWAY_URL", "").strip()
-
-
-def gateway_key() -> str:
-    """앱이 쥔 가상키. 진짜 프로바이더 키가 아니다."""
-    return os.environ.get("GATEWAY_KEY", "").strip()
+def provider() -> tuple[str, str] | None:
+    """채워진 키가 있으면 (환경변수 이름, 기본 모델)을 돌려준다."""
+    for env_name, model in PROVIDERS:
+        if os.environ.get(env_name, "").strip():
+            return env_name, model
+    return None
 
 
 def mode() -> str:
@@ -30,11 +40,19 @@ def mode() -> str:
     requested = (os.environ.get("LLM_MODE") or "auto").strip().lower()
     if requested in ("live", "offline"):
         return requested
-    return "live" if gateway() else "offline"
+    return "live" if provider() else "offline"
 
 
 def pick_model() -> str:
-    """사용할 모델 이름. 게이트웨이가 없으면 각본 대역의 이름을 돌려준다."""
-    if mode() == "offline" or not gateway():
+    """사용할 모델 이름. 키가 없으면 각본 대역의 이름을 돌려준다.
+
+    서버는 키가 없다고 죽지 않는다. 죽는 대신 각본 대역으로 답하거나
+    502로 알린다.
+    """
+    if mode() == "offline":
         return OFFLINE_MODEL
-    return "openai/" + os.environ.get("GATEWAY_MODEL", DEFAULT_GATEWAY_MODEL)
+    chosen = os.environ.get("LLM_MODEL", "").strip()
+    if chosen:
+        return chosen
+    found = provider()
+    return found[1] if found else OFFLINE_MODEL
