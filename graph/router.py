@@ -13,31 +13,40 @@
 
 from __future__ import annotations
 
-import re
-
 from core import config
 from core.llm import completion
 from core.prompts import ROUTER
+from graph import phrases
 
-ROUTES = ("apply", "one", "react", "plan", "publish")
-
-# 코드가 잡는 것들. 말이 짧고 뜻이 하나뿐이라 모델에게 물을 이유가 없다
-CERTAIN = [
-    # 되돌리기 어려운 행동도 코드가 잡는다. 모델의 해석에 맡길 자리가 아니다
-    (re.compile(r"(발행|공유\s*링크|내보내)"), "publish"),
-    (re.compile(r"(막대|바|bar)\s*(차트)?로"), "apply"),
-    (re.compile(r"(선|라인|line)\s*(차트)?로"), "apply"),
-    (re.compile(r"(파이|원|pie)\s*(차트)?로"), "apply"),
-    (re.compile(r"(맨\s*)?(위|아래)로\s*(올려|내려)"), "apply"),
-    (re.compile(r"(빼|지워|삭제)\s*(줘|주세요)?$"), "apply"),
-]
+ROUTES = ("apply", "react", "plan", "publish")
 
 
-def classify(text: str, *, simulate: str | None = None) -> tuple[str, int]:
-    """(경로, 모델 호출 수)를 돌려준다. 호출 수를 함께 주는 것이 요점이다."""
-    for pattern, route in CERTAIN:
-        if pattern.search(text or ""):
-            return route, 0
+def certain(said: str) -> str | None:
+    """코드가 잡는 것들. 말이 짧고 뜻이 하나뿐이라 모델에게 물을 이유가 없다.
+
+    **규칙은 `graph/phrases.py` 한 곳에 있다.** 여기에 정규식을 다시 적으면
+    노드 쪽과 어긋나고, 실제로 한 번 어긋나 "막대 그래프로 해줘"가 분류
+    호출로 샜다.
+    """
+    if phrases.PUBLISH.search(said):
+        # 되돌리기 어려운 행동도 코드가 잡는다. 모델의 해석에 맡길 자리가 아니다
+        return "publish"
+    if phrases.edits_selection(said):
+        return "apply"
+    return None
+
+
+def classify(text: str, *, simulate: str | None = None, budget=None) -> tuple[str, int]:
+    """(경로, 모델 호출 수)를 돌려준다. 호출 수를 함께 주는 것이 요점이다.
+
+    **장부(`budget`)를 받는 것이 중요하다.** 라우터도 모델을 부르는데 그 호출을
+    세지 않으면 화면의 "모델 호출 0회"가 거짓말이 되고, 무엇보다 6주차 예산
+    게이트가 그만큼을 못 본다. **장부에 안 잡히는 호출이 하나라도 있으면
+    예산 게이트는 반쪽이다.**
+    """
+    found = certain(text or "")
+    if found:
+        return found, 0
 
     response = completion(
         model=config.pick_model(),
@@ -45,6 +54,8 @@ def classify(text: str, *, simulate: str | None = None) -> tuple[str, int]:
                   {"role": "user", "content": text}],
         simulate=simulate,
     )
+    if budget:
+        budget.add_response(response)
     answer = (response.choices[0].message.content or "").strip().lower()
     for route in ROUTES:
         if route in answer:
@@ -64,4 +75,5 @@ def route(state: dict) -> tuple[str, int]:
         return ASKED_BY[answer["name"]], 0
     if state.get("ui_action"):
         return "apply", 0
-    return classify(state.get("text") or "", simulate=state.get("simulate"))
+    return classify(state.get("text") or "", simulate=state.get("simulate"),
+                    budget=state.get("budget"))

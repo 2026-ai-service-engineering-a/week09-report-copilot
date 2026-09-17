@@ -21,7 +21,7 @@ from core import config, daterange, metrics, patch, schema, tools
 from core.harness import BudgetExceeded, scan_injection, strip_boundary, wrap_untrusted
 from core.llm import completion
 from core.prompts import ANALYST, NARRATOR, PLANNER, VERIFIER, WRITER
-from graph import router
+from graph import phrases, router
 from graph.state import (
     ReportState, ask, state_delta, step_finished, step_started, text, tool_call,
 )
@@ -30,23 +30,6 @@ from graph.state import guard as guard_event
 MAX_REPLANS = 2      # 한도는 숫자로 건다. 넘으면 답으로 알린다 (6주차)
 
 GROUP_AXES = frozenset(getattr(schema.GroupBy, "__args__", ()))
-
-
-def _chart_word(said: str) -> str | None:
-    """말에서 차트 종류를 읽는다.
-
-    낱말이 나오고 그 뒤에 차트·그래프·로 같은 말이 따라오면 그것으로 본다.
-    "막대 그래프로 해줘"가 안 통해서 고쳤다. 정규식으로 말끝을 전부 적으려
-    들면 사용자가 말하는 방식을 매번 따라다니게 된다.
-    """
-    for word, kind in _CHART_WORDS.items():
-        found = said.find(word)
-        if found < 0:
-            continue
-        tail = said[found + len(word):found + len(word) + 12]
-        if tail.startswith("로") or "차트" in tail or "그래프" in tail or "graph" in tail.lower():
-            return kind
-    return None
 
 
 def _report_title(start: dt.date, end: dt.date) -> str:
@@ -137,17 +120,37 @@ def route_node(state: ReportState) -> dict:
                 # 0이라고 오해한다
                 events.append(guard_event("period", daterange.describe(start, end, cut=True)))
 
-    chosen, calls = router.route({**state, "report": report})
+    try:
+        chosen, calls = router.route({**state, "report": report})
+    except BudgetExceeded as e:
+        # **예산 초과는 예외가 아니라 상태다.** 라우터에서 터지면 요청이
+        # 통째로 502가 되는데, 사용자는 무엇을 하다 멈췄는지 모른다
+        return {"route": "stopped", "report": report, "events": events + [
+            guard_event("budget", str(e), stopped=True),
+            text(f"[중단] 비용 상한 초과: {e}", final=True),
+        ]}
     # **기간이 바뀌면 문서 전체가 낡는다.** 다른 할 일이 없으면 다시 채우는
     # 것이 할 일이다. 절반은 1월, 절반은 8월인 리포트를 내놓지 않는다
+    said = state.get("text") or ""
+
+    # **고른 섹션을 고치라는 말이면 그 섹션만 손본다.** 새로 만들지 않는다.
+    # "이 차트를 요일별로"가 여기 온다. 무엇을 가리키는지는 선택이 알려 준다
+    if (state.get("selected") and not state.get("ui_action")
+            and phrases.says_change(said) and (said_axis(said) or _asks_metric(said))):
+        chosen = "retarget"
+
     # 기간 말고는 아무것도 말하지 않았으면 다시 채우기만 한다. 축도 지표도
     # 말하지 않았는데 섹션을 새로 만들면 같은 그림이 두 장이 된다
-    only_period = changed and not said_axis(state.get("text") or "") and not _asks_metric(
-        state.get("text") or "")
-    if changed and (chosen == "apply" or only_period) and not state.get("ui_action"):
+    only_period = changed and not said_axis(said) and not _asks_metric(said)
+    if changed and (chosen in ("apply", "retarget") or only_period) and not state.get("ui_action"):
         chosen = "refresh"
     events += [{"event": "route", "route": chosen, "llm_calls": calls}, step_finished("route")]
     return {"route": chosen, "report": report, "period_changed": changed, "events": events}
+
+
+def stopped_node(state: ReportState) -> dict:
+    """예산이 문 앞에서 끊긴 자리. 아무것도 하지 않고 끝낸다."""
+    return {"events": []}
 
 
 # ── apply: 모델을 부르지 않는 길 ──────────────────────────────────────
@@ -155,11 +158,6 @@ def route_node(state: ReportState) -> dict:
 # 말끝이 여러 가지다. "막대로" · "막대 차트로" · "막대 그래프로 해줘" ·
 # "막대로 바꿔줘". 앞의 낱말만 찾고 뒤는 보지 않는다. 뒤를 정확히 맞히려
 # 들면 사용자가 말하는 방식을 매번 따라다니게 된다
-_CHART_WORDS = {"막대": "bar", "바 ": "bar", "bar": "bar",
-                "선": "line", "라인": "line", "line": "line",
-                "파이": "pie", "원형": "pie", "pie": "pie"}
-
-
 def _selected_index(state: ReportState) -> int | None:
     """화면에서 무엇이 선택돼 있는지. **이 한 줄이 v1과 v2를 가른다.**
 
@@ -192,7 +190,7 @@ def apply_node(state: ReportState) -> dict:
     elif action.get("type") == "set_filter":
         ops = [patch.replace(f"/filters/{action['field']}", action["value"])]
     elif index is not None:
-        kind = _chart_word(said)
+        kind = phrases.chart_word(said)
         if kind:
             ops = [patch.replace(f"/sections/{index}/chart", kind)]
         elif any(word in said for word in ("빼", "지워", "삭제")):
@@ -264,11 +262,19 @@ def plan_node(state: ReportState) -> dict:
 
 
 def section_node(state: dict) -> dict:
-    """분석가가 숫자를 가져오고 작성가가 한 문장을 쓴다.
+    """섹션 하나를 채운다. 숫자를 가져오고 한 문장을 쓴다.
 
-    섹션끼리 서로를 참조하지 않으므로 순서대로 돌 이유가 없다. 7주차
-    코딩 에이전트와 달리 **파일을 만지지 않아 worktree도 필요 없다.**
-    병렬화는 모델의 문제가 아니라 작업 공간의 문제다.
+    **아는 것은 모델에게 묻지 않는다.** 섹션에는 지표와 축이 이미 적혀 있고
+    기간도 문서에 있다. 질의 스펙이 완전히 정해져 있으므로 도구를 직접
+    부른다. 분석가 노드를 한 번 거치면 모델이 그 JSON을 그대로 옮겨 적을
+    뿐인데, 그 옮겨 적기에 요금이 나가고 가끔 틀린다.
+
+    모델이 값을 하는 자리는 **실패한 뒤**다. 도구가 error를 돌려주면 그때
+    한 번 분석가에게 인자를 고쳐 보게 한다. 5주차에서 배운 도구 오류 복구는
+    잘 될 때가 아니라 안 될 때 필요한 것이다.
+
+    섹션끼리 서로를 참조하지 않으므로 순서대로 돌 이유가 없다. 7주차 코딩
+    에이전트와 달리 **파일을 만지지 않아 worktree도 필요 없다.**
     """
     section = state["section"]
     period = state["period"]
@@ -278,43 +284,53 @@ def section_node(state: dict) -> dict:
         "metric": section["metric"], "date_from": period["from"], "date_to": period["to"],
         "group_by": section.get("groupBy"), "limit": section.get("limit", 10),
     }
-    try:
-        response = _ask_model(state, ANALYST, json.dumps(spec, ensure_ascii=False), tools_on=True)
-    except BudgetExceeded as e:
-        events.append(guard_event("budget", str(e), stopped=True))
-        return {"results": [{"id": section["id"], "status": "stopped_by_budget",
-                             "rows": [], "note": f"[중단] {e}"}], "events": events}
+    observation = tools.run_tool("run_query", json.dumps(spec, ensure_ascii=False))
+    events.append(tool_call("run_query", spec, observation))
+    parsed = json.loads(observation)
 
-    calls = getattr(response.choices[0].message, "tool_calls", None) or []
-    observation, rows, total, failed = "", [], None, None
-    for call in calls:
-        observation = tools.run_tool(call.function.name, call.function.arguments)
-        events.append(tool_call(call.function.name, json.loads(call.function.arguments or "{}"),
-                                observation))
-        parsed = json.loads(observation)
-        rows = parsed.get("rows") or rows
-        total = parsed.get("total", total)
-        failed = parsed.get("error") or failed
+    if parsed.get("error"):
+        # 여기서부터가 모델이 값을 하는 자리다. 오류를 보여 주고 한 번만
+        # 고쳐 보게 한다. 두 번 이상 시키지 않는 것은 6주차의 스텝 한도와
+        # 같은 생각이다
+        try:
+            fix = _ask_model(
+                state, ANALYST,
+                f"이 질의가 실패했다. 인자를 고쳐 다시 시도하라.\n"
+                f"요청: {json.dumps(spec, ensure_ascii=False)}\n결과: {observation}",
+                tools_on=True,
+            )
+        except BudgetExceeded as e:
+            events.append(guard_event("budget", str(e), stopped=True))
+            return {"results": [{"id": section["id"], "status": "stopped_by_budget",
+                                 "rows": [], "total": None, "note": f"[중단] {e}"}],
+                    "events": events}
+        for call in getattr(fix.choices[0].message, "tool_calls", None) or []:
+            observation = tools.run_tool(call.function.name, call.function.arguments)
+            events.append(tool_call(call.function.name,
+                                    json.loads(call.function.arguments or "{}"), observation))
+            parsed = json.loads(observation)
 
-    if failed or not rows:
-        # **조회가 실패하면 작성가를 부르지 않는다.** 부르면 오류 문자열을
-        # 문장으로 옮겨 적고, 그 문장이 리포트 본문이 된다. 모델 호출도
-        # 한 번 아낀다
-        events.append(step_finished(f"section:{section['id']}"))
-        return {"results": [{"id": section["id"], "status": "unverified", "rows": [],
-                             "total": None,
-                             "note": f"이 구간의 값을 가져오지 못했습니다: {failed or '결과 없음'}"}],
-                "events": events}
+    rows = parsed.get("rows") or []
+    total = parsed.get("total")
 
     findings = scan_injection(observation)
     if findings:
         events.append(guard_event("injection_scan", ", ".join(findings)))
 
+    if parsed.get("error") or not rows:
+        # **조회가 실패하면 작성가를 부르지 않는다.** 부르면 오류 문자열을
+        # 문장으로 옮겨 적고, 그 문장이 리포트 본문이 된다
+        events.append(step_finished(f"section:{section['id']}"))
+        return {"results": [{"id": section["id"], "status": "unverified", "rows": [],
+                             "total": None,
+                             "note": f"이 구간의 값을 가져오지 못했습니다: "
+                                     f"{parsed.get('error') or '결과 없음'}"}],
+                "events": events}
+
     try:
         written = _ask_model(
             state, WRITER,
-            f"{section['title']}\n"
-            + wrap_untrusted("run_query", observation or "{}"),
+            f"{section['title']}\n" + wrap_untrusted("run_query", observation),
         )
         # 경계 마커는 모델에게 주는 표시다. 따라 적은 것을 그대로 두면
         # 리포트 본문에 `<<<DATA …>>>`가 실려 나간다
@@ -436,25 +452,9 @@ def narrate_node(state: ReportState) -> dict:
 
 # ── react: 한 섹션만 만드는 짧은 길 ───────────────────────────────────
 
-_AXIS_WORDS: list[tuple[str, tuple[str, ...]]] = [
-    ("month", ("월별", "달별", "월간")),
-    ("week", ("주별", "주간", "주차별")),
-    ("weekday", ("요일", "요일별")),
-    ("nation", ("국적", "나라", "국가")),
-    ("genre", ("장르",)),
-    ("distributor", ("배급",)),
-    ("watchGrade", ("등급",)),
-    ("movieType", ("영화구분", "예술영화", "독립영화")),
-    ("movieNm", ("영화별", "작품별", "상위", "순위", "톱")),
-]
-
-
 def said_axis(said: str) -> str | None:
-    """말에 **명시된** 축만 돌려준다. 없으면 None."""
-    for axis, words in _AXIS_WORDS:
-        if any(word in said for word in words):
-            return axis
-    return axis_for_span(said) if False else None
+    """말에 명시된 축. 규칙은 `graph/phrases.py`에 있다."""
+    return phrases.axis_word(said)
 
 
 def _span_days(period: dict) -> int:
@@ -632,3 +632,53 @@ def refresh_node(state: ReportState) -> dict:
     sections = report["sections"]
     return {"report": report, "plan": list(sections), "results": [],
             "events": [step_started("refresh"), state_delta(ops), step_finished("refresh")]}
+
+
+# ── retarget: 고른 섹션을 말로 고친다 ────────────────────────────────
+
+
+def retarget_node(state: ReportState) -> dict:
+    """"요일별로 바꿔줘" — 고른 섹션의 **축이나 지표를 바꾸고 다시 채운다.**
+
+    공유 상태를 다루는 제품에서 가장 자주 나오는 말인데 처음에는 없었다.
+    차트 종류를 바꾸는 것(`apply`)과 섹션을 새로 만드는 것(`react`)만 있어서,
+    "이 차트를 요일별로"가 둘 중 어디에도 걸리지 않고 "무엇을 바꿀지 알기
+    어렵습니다"로 떨어졌다.
+
+    차트 종류와 다른 점이 하나 있다. **축이나 지표가 바뀌면 숫자가 달라진다.**
+    그래서 패치만으로 끝나지 않고 그 섹션을 다시 채워야 한다.
+    """
+    index = _selected_index(state)
+    report = dict(state["report"])
+    if index is None:
+        return {"plan": [], "events": [text(
+            "어느 섹션을 바꿀지 알기 어렵습니다. 섹션을 클릭해 고른 다음 다시 말씀해 주세요.",
+            final=True)]}
+
+    said = state.get("text") or ""
+    section = report["sections"][index]
+    axis = said_axis(said)
+    metric = section["metric"]
+    try:
+        found = metrics.lookup(said)
+        if found.computable:
+            metric = found.id
+    except Exception:
+        pass
+
+    if axis == section.get("groupBy") and metric == section["metric"]:
+        return {"plan": [], "events": [text("이미 그렇게 보고 있습니다.", final=True)]}
+
+    ops = [patch.replace(f"/sections/{index}/status", "pending")]
+    if axis is not None:
+        ops.append(patch.replace(f"/sections/{index}/groupBy", axis))
+        ops.append(patch.replace(
+            f"/sections/{index}/chart", _chart_for(section.get("chart"), axis, section["kind"])))
+    if metric != section["metric"]:
+        ops.append(patch.replace(f"/sections/{index}/metric", metric))
+    ops.append(patch.replace(
+        f"/sections/{index}/title", _title(metric, axis if axis is not None else section.get("groupBy"))))
+
+    report = patch.apply(report, ops)
+    return {"report": report, "plan": [report["sections"][index]], "results": [],
+            "events": [step_started("retarget"), state_delta(ops), step_finished("retarget")]}
